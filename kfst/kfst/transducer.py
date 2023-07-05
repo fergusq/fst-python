@@ -308,8 +308,8 @@ def main():
         except EOFError:
             break
 
-        for os, w in fst.lookup(fst.split_to_symbols(text)):
-            print("".join(os), w)
+        for output, w in fst.lookup(text):
+            print(output, w)
 
 if __name__ == "__main__":
     main()
