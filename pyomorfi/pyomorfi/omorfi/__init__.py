@@ -71,9 +71,9 @@ def find_omorfi(large_coverage=False) -> str:
         dirs += [cwd + "/src/generated/", cwd + "/generated/", cwd + "/"]
     for d in dirs:
         if large_coverage:
-            filename = d + "/" + "omorfi.describe.att"
+            filename = d + "/" + "omorfi.describe.kfst"
         else:
-            filename = d + "/" + "omorfi.analyse.att"
+            filename = d + "/" + "omorfi.analyse.kfst"
         if os.path.isfile(filename):
             return filename
     raise FileNotFoundError()

@@ -26,14 +26,14 @@ def load_omorfi(
         http://flammie.github.io/omorfi/smaller-lexicons.html
     """
     omorfi_obj = Omorfi()
-    analyser_file = "omorfi.describe.att" if large_coverage else "omorfi.analyse.att"
+    analyser_file = "omorfi.describe.kfst" if large_coverage else "omorfi.analyse.kfst"
     if load_analyser:
         omorfi_obj.load_analyser(os.path.join(SCRIPT_DIR, analyser_file))
     
     if load_segmenter:
-        omorfi_obj.load_segmenter(os.path.join(SCRIPT_DIR, "omorfi.segment.att"))
+        omorfi_obj.load_segmenter(os.path.join(SCRIPT_DIR, "omorfi.segment.kfst"))
     
     if load_generator:
-        omorfi_obj.load_generator(os.path.join(SCRIPT_DIR, "omorfi.generate.att"))
+        omorfi_obj.load_generator(os.path.join(SCRIPT_DIR, "omorfi.generate.kfst"))
     
     return omorfi_obj
