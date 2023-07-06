@@ -26,7 +26,7 @@ Just import `pyomorfi.omorfi` instead of `omorfi`.
 from pyomorfi.omorfi import Omorfi
 
 omorfi = Omorfi()
-omorfi.load_analyser("omorfi.analyse.att")
+omorfi.load_analyser("omorfi.analyse.kfst")
 
 analyses = omorfi.analyse("kissa")
 ```
