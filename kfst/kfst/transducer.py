@@ -16,7 +16,9 @@
 # along with KFST. If not, see <https://www.gnu.org/licenses/>. 
 
 import argparse
+import lzma
 import re
+import struct
 from collections import defaultdict
 from pathlib import Path
 from typing import NamedTuple
@@ -40,7 +42,7 @@ class FST(NamedTuple):
     Represents a finite state transducer
     """
     final_states: dict[int, float]
-    rules: defaultdict[int, defaultdict[str, list[tuple[int, str, int]]]]
+    rules: defaultdict[int, defaultdict[str, list[tuple[int, str, float]]]]
     symbols: set[str]
     debug: bool = False
 
@@ -100,6 +102,99 @@ class FST(NamedTuple):
                 raise RuntimeError("Cannot parse line:", line)
 
         return fst
+
+    @staticmethod
+    def from_kfst_file(kfst_file: str | Path, debug: bool = False) -> "FST":
+        """
+        Parses a transducer in the KFST binary format and returns an FST object.
+        The input must be the path to the .kfst file.
+
+        If you already have the content of the .kfst file, use FST.from_kfst_bytes() instead.
+
+        If you use HFST, .kfst files can be created using the command:
+        ```sh
+        python -m kfst.convert file.hfst file.kfst
+        ```
+        """
+        if not isinstance(kfst_file, Path):
+            kfst_file = Path(kfst_file)
+
+        kfst_bytes = kfst_file.read_bytes()
+        return FST.from_kfst_bytes(kfst_bytes, debug=debug)
+
+    @staticmethod
+    def from_kfst_bytes(kfst_bytes: bytes, debug: bool = False) -> "FST":
+        """
+        Parses a transducer in the KFST binary format and returns an FST object.
+
+        Note that the input must be the content of the .kfst file, not the path to the file.
+        For that, use FST.from_kfst_file() instead.
+        """
+
+        fst = FST(
+            final_states={},
+            rules=defaultdict(lambda: defaultdict(list)),
+            symbols=set(),
+            debug=debug,
+        )
+
+        reader = KFSTReader(kfst_bytes)
+        reader.read_into(fst)
+        
+        return fst
+
+    def to_kfst_file(self, path: str | Path):
+        """
+        Encodes the FST in the KFST binary format and writes it to the given path.
+        """
+        if not isinstance(path, Path):
+            path = Path(path)
+
+        path.write_bytes(self.to_kfst_bytes())
+        
+    def to_kfst_bytes(self) -> bytes:
+        """
+        Encodes the FST in the KFST binary format.
+        """
+
+        is_weighted = any(weight != 0 for weight in self.final_states.values()) or any(weight != 0 for state in self.rules.values() for transitions in state.values() for _, _, weight in transitions)
+
+        assert len(self.symbols) <= 2**16, "Too many symbols"
+
+        num_rules = sum(len(transitions) for state in self.rules.values() for transitions in state.values())
+
+        assert num_rules <= 2**32, "Too many rules"
+        assert len(self.final_states) <= 2**32, "Too many final states"
+
+        buffer = bytes()
+        buffer += b"KFST"
+        buffer += struct.pack("!H", 0) # version
+        buffer += struct.pack("!HII?", len(self.symbols), num_rules, len(self.final_states), is_weighted) # header
+
+        # Write symbols
+        symbols_list = sorted(self.symbols)
+        for symbol in symbols_list:
+            buffer += symbol.encode("utf-8") + b"\x00"
+
+        state_bytes = []
+        
+        # Write states
+        for from_state, transitions in self.rules.items():
+            for input_symbol, transitions_list in transitions.items():
+                for to_state, output_symbol, weight in transitions_list:
+                    state_bytes.append(struct.pack("!IIHH", from_state, to_state, symbols_list.index(input_symbol), symbols_list.index(output_symbol)))
+                    if is_weighted:
+                        state_bytes.append(struct.pack("!d", weight))
+        
+        # Write final states
+        for state, weight in self.final_states.items():
+            state_bytes.append(struct.pack("!I", state))
+            if is_weighted:
+                state_bytes.append(struct.pack("!d", weight))
+        
+        data = b"".join(state_bytes)
+        buffer += lzma.compress(data)
+        return buffer
 
     def split_to_symbols(self, text: str) -> list[str] | None:
         """
@@ -186,6 +281,7 @@ class FST(NamedTuple):
         """
 
         input_symbols = self.split_to_symbols(input)
+        assert input_symbols is not None, "Input cannot be split into symbols"
         results = self.run_fst(input_symbols, state=state)
         results = sorted(results, key=lambda x: x[1])
         already_seen = set()
@@ -282,17 +378,86 @@ class FST(NamedTuple):
         return symbol == "@0@" or symbol == "@_EPSILON_SYMBOL_@" or self._is_flag(symbol)
     
     def _is_flag(self, symbol: str) -> bool:
-        return re.match(r"^@[PNDRCU]\.", symbol)
+        return bool(re.match(r"^@[PNDRCU]\.", symbol))
+
+
+class KFSTReader:
+
+    def __init__(self, buffer):
+        self.buffer = buffer
+        self.pointer = 0
+
+    def read_into(self, fst: FST):
+        # Validate signature
+        assert self.buffer[:4] == b"KFST"
+        self.pointer += 4
+
+        # Parse version
+        (version,) = self.unpack_and_advance("!H")
+
+        assert version == 0, "Unsupported KFST binary file version"
+
+        # Parse header
+        num_symbols, num_states, num_final_states, is_weighted = self.unpack_and_advance("!HII?")
+
+        # Parse symbols
+        symbols_list = []
+        for _ in range(num_symbols):
+            symbol = self.read_null_terminated_string()
+            symbol_string = symbol.decode("utf-8")
+            fst.symbols.add(symbol_string)
+            symbols_list.append(symbol_string)
+        
+        lzma_data = self.buffer[self.pointer:]
+        self.buffer = lzma.decompress(lzma_data)
+        self.pointer = 0
+        
+        # Parse states
+        for _ in range(num_states):
+            from_state, to_state, input_symbol, output_symbol = self.unpack_and_advance("!IIHH")
+            weight = 0
+
+            if is_weighted:
+                (weight,) = self.unpack_and_advance("!d")
+
+            fst.rules[from_state][symbols_list[input_symbol]].append((to_state, symbols_list[output_symbol], weight))
+        
+        # Parse final states
+        for _ in range(num_final_states):
+            (state,) = self.unpack_and_advance("!I")
+            weight = 0
+            if is_weighted:
+                (weight,) = self.unpack_and_advance("!d")
+            
+            fst.final_states[state] = weight
+
+    def unpack_and_advance(self, format: str):
+        size = struct.calcsize(format)
+        ans = struct.unpack(format, self.buffer[self.pointer:self.pointer+size])
+        self.pointer += size
+        return ans
+
+    def read_null_terminated_string(self) -> bytes:
+        i = self.buffer[self.pointer:].find(b"\x00")
+        string = self.buffer[self.pointer:self.pointer+i]
+        self.pointer += i + 1
+        return string
 
 
 def main():
     parser = argparse.ArgumentParser(description="Finite State Transducer interpreter written in Python")
-    parser.add_argument("att_file", type=Path, help="FST in AT&T format")
+    parser.add_argument("fst_file", type=Path, help="FST in AT&T or KFST format")
     parser.add_argument("-d", action="store_true", help="enable debug mode")
     parser.add_argument("-s", action="store_true", help="print symbols in transducer and exit")
+    parser.add_argument("-f", choices=["att", "kfst", "auto"], default="auto", help="force input format")
     args = parser.parse_args()
 
-    fst = FST.from_att_file(args.att_file, debug=args.d)
+    if args.fst_file.suffix == ".kfst" if args.f == "auto" else args.f == "kfst":
+        fst =  FST.from_kfst_file(args.fst_file, debug=args.d)
+    
+    else:
+        fst = FST.from_att_file(args.fst_file, debug=args.d)
+    
     if args.s:
         print(sorted(fst.symbols))
         return
