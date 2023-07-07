@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 from typing import NamedTuple
 
@@ -32,7 +34,7 @@ class VoikkoAnalysis(NamedTuple):
     CLASS: str
     FSTOUTPUT: str
     INFO_FLAGS: list[str]
-    
+
     # Verb attributes
     MOOD: str | None = None
     NEGATIVE: str | None = None
