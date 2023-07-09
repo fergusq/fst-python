@@ -28,6 +28,12 @@ pip install pyvoikko
 
 Please refer to the README files of the individual projects for usage instructions.
 
+## Speed
+
+KFST is written in pure Python and is therefore much slower than native libraries like HFST and libvoikko.
+For example, on my computer, libvoikko takes about 0.02 ms to analyse a word, while PyVoikko takes about 1 ms.
+However, this is still fast enough for many use cases.
+
 ## Contributing
 
 This project is in very early stages of its development and there are likely many bugs.
