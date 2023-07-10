@@ -165,7 +165,6 @@ class FST(NamedTuple):
         if not input_symbols:
             if state.state_num in self.final_states:
                 yield state.output_symbols, state.path_weight
-                return
 
         else:
             isymbol = input_symbols[0]
