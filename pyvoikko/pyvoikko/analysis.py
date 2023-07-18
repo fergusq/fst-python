@@ -90,7 +90,11 @@ class VoikkoAnalysis(NamedTuple):
             COMPOUND_PARTS=analyses,
             FSTOUTPUT=analysis,
             FORM = "".join([analysis.FORM for analysis in analyses]),
-            BASEFORM = "".join([analysis.BASEFORM + ("-" if analysis.FORM.endswith("-") else "") for analysis in analyses]),
+            BASEFORM = "".join([
+                (analysis.BASEFORM if analysis.CLASS in {"laatusana", "nimisana_laatusana"} else analysis.FORM)
+                + ("-" if analysis.FORM.endswith("-") else "")
+                for analysis in analyses
+            ]),
         )
 
     @staticmethod
