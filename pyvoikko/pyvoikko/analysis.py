@@ -91,7 +91,7 @@ class VoikkoAnalysis(NamedTuple):
             FSTOUTPUT=analysis,
             FORM = "".join([analysis.FORM for analysis in analyses]),
             BASEFORM = "".join([
-                (analysis.BASEFORM if analysis.CLASS in {"laatusana", "nimisana_laatusana"} else analysis.FORM)
+                (analysis.BASEFORM if analysis == analyses[-1] or analysis.CLASS in {"laatusana", "nimisana_laatusana"} else analysis.FORM)
                 + ("-" if analysis.FORM.endswith("-") else "")
                 for analysis in analyses
             ]),
