@@ -224,7 +224,7 @@ class FST(NamedTuple):
         """
 
         input_symbols = self.split_to_symbols(input)
-        if input_symbols == None:
+        if input_symbols is None:
             raise TokenizationException("Input cannot be split into symbols")
 
         results = self.run_fst(input_symbols, state=state)
