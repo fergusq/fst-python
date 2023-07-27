@@ -23,6 +23,9 @@ from typing import Mapping, NamedTuple
 
 from frozendict import frozendict
 
+class TokenizationException(Exception):
+    """Raised when failing to convert input string to symbols in KFST."""
+    pass
 
 class FSTState(NamedTuple):
     state_num: int
@@ -216,10 +219,14 @@ class FST(NamedTuple):
         Yields a tuple of (output_symbols, path_weight) for each successful path.
         
         Otherwise same as run_fst, but operates on strings instead of symbol lists, filters out duplicate outputs and sorts the results by weight.
+
+        Raises a TokenizationException if the input string can not be converted into the symbols of the KFST transducer.
         """
 
         input_symbols = self.split_to_symbols(input)
-        assert input_symbols is not None, "Input cannot be split into symbols"
+        if input_symbols == None:
+            raise TokenizationException("Input cannot be split into symbols")
+
         results = self.run_fst(input_symbols, state=state)
         results = sorted(results, key=lambda x: x[1])
         already_seen = set()

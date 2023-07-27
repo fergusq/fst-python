@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os.path
 
-from kfst import FST
+from kfst import FST, TokenizationException
 
 from .analysis import VoikkoAnalysis
 
@@ -21,7 +21,10 @@ def analyse(word: str) -> list[VoikkoAnalysis]:
         list of `VoikkoAnalysis` objects
     """
     ans = []
-    for analysis, _weight in VOIKKO_FST.lookup(word):
-        ans.append(VoikkoAnalysis.from_voikko_analysis(analysis))
+    try:
+        for analysis, _weight in VOIKKO_FST.lookup(word):
+            ans.append(VoikkoAnalysis.from_voikko_analysis(analysis))
+    except TokenizationException:
+        pass
     
     return ans
