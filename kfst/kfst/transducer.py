@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Mapping, NamedTuple
+from typing import Generator, Mapping, NamedTuple
 
 from frozendict import frozendict
 
@@ -32,7 +32,7 @@ class FSTState(NamedTuple):
     path_weight: float = 0
     input_flags: frozendict[str, str] = frozendict()
     output_flags: frozendict[str, str] = frozendict()
-    output_symbols: list[str] = []
+    output_symbols: tuple[str, ...] = tuple()
 
     def __repr__(self):
         return f"FSTState({self.state_num}, {self.path_weight}, {self.input_flags}, {self.output_flags}, {self.output_symbols})"
@@ -88,6 +88,21 @@ class FST(NamedTuple):
         """
 
         return decode_att(att_code)._replace(debug=debug)
+
+    def to_att_file(self, att_file: str | Path) -> None:
+        """
+        Encodes the FST in the AT&T tabular format and writes it the given path.
+        """
+        if not isinstance(att_file, Path):
+            att_file = Path(att_file)
+
+        att_file.write_text(self.to_att_code())
+    
+    def to_att_code(self) -> str:
+        """
+        Encodes the FST in the AT&T tabular format.
+        """
+        return encode_att(self)
 
     @staticmethod
     def from_kfst_file(kfst_file: str | Path, debug: bool = False) -> "FST":
@@ -159,25 +174,24 @@ class FST(NamedTuple):
         
         return ans
 
-    def run_fst(self, input_symbols: list[str], state=FSTState(0)):
+    def run_fst(self, input_symbols: list[str], state=FSTState(0), post_input_advance=False) -> Generator[tuple[bool, bool, FSTState], None, None]:
         """
         Runs the FST on the given input symbols, starting from the given state (by default 0).
-        Yields a tuple of (output_symbols, path_weight) for each successful path.
+        Yields an (bool, FSTState) tuple for each path. If the path ended in a final state, the bool will be True, otherwise False.
         """
-        transitions = self.rules[state.state_num]
+        transitions = self.rules.get(state.state_num, {})
         if not input_symbols:
-            if state.state_num in self.final_states:
-                yield state.output_symbols, state.path_weight
+            yield state.state_num in self.final_states, post_input_advance, state
 
         else:
             isymbol = input_symbols[0]
-            for next_state, osymbol, weight in transitions[isymbol]:
+            for next_state, osymbol, weight in transitions.get(isymbol, []) + transitions.get("@_UNKNOWN_SYMBOL_@", []) + transitions.get("@_IDENTITY_SYMBOL_@", []):
                 if self.debug:
                     print(state.state_num, "->", next_state, isymbol, osymbol, input_symbols, state)
                 
                 new_input_flags = self._update_flags(isymbol, state.input_flags)
                 new_output_flags = self._update_flags(osymbol, state.output_flags)
-                o = [osymbol] if not self._is_epsilon(osymbol) else []
+                o = (isymbol,) if osymbol == "@_IDENTITY_SYMBOL_@" else (osymbol,) if not self._is_epsilon(osymbol) else ()
 
                 if new_input_flags is None or new_output_flags is None:
                     continue # flag unification failed
@@ -200,7 +214,7 @@ class FST(NamedTuple):
                     print(state.state_num, "->", next_state, eps, osymbol, input_symbols, state)
                 
                 new_output_flags = self._update_flags(osymbol, state.output_flags)
-                o = [osymbol] if not self._is_epsilon(osymbol) else []
+                o = (osymbol,) if not self._is_epsilon(osymbol) else ()
 
                 if new_output_flags is None:
                     continue # flag unification failed
@@ -211,7 +225,7 @@ class FST(NamedTuple):
                     output_flags=new_output_flags,
                     output_symbols=state.output_symbols + o
                 )
-                yield from self.run_fst(input_symbols, state=new_state)
+                yield from self.run_fst(input_symbols, state=new_state, post_input_advance=len(input_symbols) == 0)
     
     def lookup(self, input: str, state=FSTState(0)):
         """
@@ -230,7 +244,12 @@ class FST(NamedTuple):
         results = self.run_fst(input_symbols, state=state)
         results = sorted(results, key=lambda x: x[1])
         already_seen = set()
-        for os, w in results:
+        for finished, _, state in results:
+            if not finished:
+                continue
+
+            w = state.path_weight
+            os = state.output_symbols
             o = "".join(os)
             if o not in already_seen:
                 yield o, w
@@ -322,7 +341,7 @@ class FST(NamedTuple):
     def _is_flag(self, symbol: str) -> bool:
         return len(symbol) > 4 and symbol[0] == "@" and symbol[-1] == "@" and symbol[1] in "PNDRCU" and symbol[2] == "."
 
-from .format.att import decode_att
+from .format.att import decode_att, encode_att
 from .format.kfst import decode_kfst, encode_kfst
 
 
