@@ -32,3 +32,25 @@ def decode_att(att_code: str) -> FST:
             raise RuntimeError("Cannot parse line:", line)
 
     return FST.from_rules(final_states, rules, symbols)
+
+def encode_att(fst: FST) -> str:
+    """
+    Encodes the FST in the AT&T tabular format.
+    """
+
+    ans = []
+    for final_state, weight in fst.final_states.items():
+        if weight == 0:
+            ans.append(str(final_state))
+        else:
+            ans.append("\t".join([str(final_state), str(weight)]))
+    
+    for from_state, transitions in fst.rules.items():
+        for input_symbol, transitions_list in transitions.items():
+            for to_state, output_symbol, weight in transitions_list:
+                if weight == 0:
+                    ans.append("\t".join([str(from_state), str(to_state), input_symbol, output_symbol]))
+                else:
+                    ans.append("\t".join([str(from_state), str(to_state), input_symbol, output_symbol, str(weight)]))
+    
+    return "\n".join(ans)
