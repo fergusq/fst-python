@@ -1,7 +1,25 @@
+# This file is part of KFST.
+#
+# (c) 2023 Iikka Hauhio <iikka.hauhio@helsinki.fi>
+#
+# KFST is free software: you can redistribute it and/or modify it under the
+# terms of the GNU Lesser General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option) any
+# later version.
+#
+# KFST is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more
+# details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with KFST. If not, see <https://www.gnu.org/licenses/>. 
+
 from collections import defaultdict
 import lzma
 import struct
 
+from ..symbols import Symbol, from_symbol_string
 from ..transducer import FST
 
 class KFSTReader:
@@ -11,8 +29,8 @@ class KFSTReader:
 
     def read(self):
         final_states: dict[int, float] = {}
-        rules: defaultdict[int, defaultdict[str, list[tuple[int, str, float]]]] = defaultdict(lambda: defaultdict(list))
-        symbols: set[str] = set()
+        rules: defaultdict[int, defaultdict[Symbol, list[tuple[int, Symbol, float]]]] = defaultdict(lambda: defaultdict(list))
+        symbols: set[Symbol] = set()
 
         # Validate signature
         assert self.buffer[:4] == b"KFST"
@@ -27,12 +45,13 @@ class KFSTReader:
         num_symbols, num_states, num_final_states, is_weighted = self.unpack_and_advance("!HII?")
 
         # Parse symbols
-        symbols_list = []
+        symbols_list: list[Symbol] = []
         for _ in range(num_symbols):
             symbol = self.read_null_terminated_string()
             symbol_string = symbol.decode("utf-8")
-            symbols.add(symbol_string)
-            symbols_list.append(symbol_string)
+            symbol_obj = from_symbol_string(symbol_string)
+            symbols.add(symbol_obj)
+            symbols_list.append(symbol_obj)
         
         lzma_data = self.buffer[self.pointer:]
         self.buffer = lzma.decompress(lzma_data)
@@ -100,9 +119,9 @@ def encode_kfst(fst: FST) -> bytes:
     buffer += struct.pack("!HII?", len(fst.symbols), num_rules, len(fst.final_states), is_weighted) # header
 
     # Write symbols
-    symbols_list = sorted(fst.symbols)
+    symbols_list = sorted(fst.symbols, key=lambda s: s.get_symbol())
     for symbol in symbols_list:
-        buffer += symbol.encode("utf-8") + b"\x00"
+        buffer += symbol.get_symbol().encode("utf-8") + b"\x00"
 
     state_bytes = []
     

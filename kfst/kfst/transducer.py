@@ -21,18 +21,21 @@ import argparse
 from pathlib import Path
 from typing import Generator, Mapping, NamedTuple
 
-from frozendict import frozendict
+from immutables import Map
+
+from .symbols import Symbol, StringSymbol, FlagDiacriticSymbol, SpecialSymbol
 
 class TokenizationException(Exception):
     """Raised when failing to convert input string to symbols in KFST."""
     pass
 
+
 class FSTState(NamedTuple):
     state_num: int
     path_weight: float = 0
-    input_flags: frozendict[str, str] = frozendict()
-    output_flags: frozendict[str, str] = frozendict()
-    output_symbols: tuple[str, ...] = tuple()
+    input_flags: Map[str, tuple[bool, str]] = Map()
+    output_flags: Map[str, tuple[bool, str]] = Map()
+    output_symbols: tuple[Symbol, ...] = tuple()
 
     def __repr__(self):
         return f"FSTState({self.state_num}, {self.path_weight}, {self.input_flags}, {self.output_flags}, {self.output_symbols})"
@@ -43,21 +46,21 @@ class FST(NamedTuple):
     Represents a finite state transducer
     """
     final_states: Mapping[int, float]
-    rules: Mapping[int, Mapping[str, list[tuple[int, str, float]]]]
-    symbols: list[str] # Must be sorted in reverse order by length
+    rules: Mapping[int, Mapping[Symbol, list[tuple[int, Symbol, float]]]]
+    symbols: list[Symbol] # Must be sorted in reverse order by length
     debug: bool = False
 
     @staticmethod
     def from_rules(
         final_states: Mapping[int, float],
-        rules: Mapping[int, Mapping[str, list[tuple[int, str, float]]]],
-        symbols: set[str],
+        rules: Mapping[int, Mapping[Symbol, list[tuple[int, Symbol, float]]]],
+        symbols: set[Symbol],
         debug: bool = False,
     ):
         """
         Creates an FST from a dictionary of final states, a dictionary of rules and a set of symbols.
         """
-        return FST(final_states, rules, sorted(symbols, key=lambda s: -len(s)), debug=debug)
+        return FST(final_states, rules, sorted(symbols, key=lambda s: -len(s.get_symbol())), debug=debug)
 
     @staticmethod
     def from_att_file(att_file: str | Path, debug: bool = False) -> "FST":
@@ -150,7 +153,7 @@ class FST(NamedTuple):
 
         return encode_kfst(self)
 
-    def split_to_symbols(self, text: str) -> list[str] | None:
+    def split_to_symbols(self, text: str) -> list[Symbol] | None:
         """
         Splits a given string into a list of symbols.
         For each position in the string, greedily selects the longest symbol that matches.
@@ -161,10 +164,10 @@ class FST(NamedTuple):
         # Symbols are assumed to be sorted in a reverse order by length
         # See FST.from_rules() implementation
 
-        ans = []
+        ans: list[Symbol] = []
         while text:
             for s in self.symbols:
-                if text.startswith(s):
+                if isinstance(s, StringSymbol) and text.startswith(s.string):
                     ans.append(s)
                     text = text[len(s):]
                     break
@@ -174,7 +177,7 @@ class FST(NamedTuple):
         
         return ans
 
-    def run_fst(self, input_symbols: list[str], state=FSTState(0), post_input_advance=False) -> Generator[tuple[bool, bool, FSTState], None, None]:
+    def run_fst(self, input_symbols: list[Symbol], state=FSTState(0), post_input_advance=False) -> Generator[tuple[bool, bool, FSTState], None, None]:
         """
         Runs the FST on the given input symbols, starting from the given state (by default 0).
         Yields an (bool, FSTState) tuple for each path. If the path ended in a final state, the bool will be True, otherwise False.
@@ -182,50 +185,40 @@ class FST(NamedTuple):
         transitions = self.rules.get(state.state_num, {})
         if not input_symbols:
             yield state.state_num in self.final_states, post_input_advance, state
+            isymbol = None
 
         else:
             isymbol = input_symbols[0]
-            for next_state, osymbol, weight in transitions.get(isymbol, []) + transitions.get("@_UNKNOWN_SYMBOL_@", []) + transitions.get("@_IDENTITY_SYMBOL_@", []):
-                if self.debug:
-                    print(state.state_num, "->", next_state, isymbol, osymbol, input_symbols, state)
-                
-                new_input_flags = self._update_flags(isymbol, state.input_flags)
-                new_output_flags = self._update_flags(osymbol, state.output_flags)
-                o = (isymbol,) if osymbol == "@_IDENTITY_SYMBOL_@" else (osymbol,) if not self._is_epsilon(osymbol) else ()
 
-                if new_input_flags is None or new_output_flags is None:
-                    continue # flag unification failed
+        for transition_isymbol in transitions:
+            if transition_isymbol.is_epsilon() or isymbol is not None and (transition_isymbol == isymbol or transition_isymbol == SpecialSymbol.UNKNOWN or transition_isymbol == SpecialSymbol.IDENTITY):
+                for next_state, osymbol, weight in transitions[transition_isymbol]:
+                    if self.debug:
+                        print(state.state_num, "->", next_state, transition_isymbol, osymbol, input_symbols, state)
+                    
+                    new_output_flags = self._update_flags(osymbol, state.output_flags)
+                    if new_output_flags is None:
+                        continue # flag unification failed
 
-                new_state = state._replace(
-                    state_num=next_state,
-                    path_weight=state.path_weight + weight,
-                    input_flags=new_input_flags,
-                    output_flags=new_output_flags,
-                    output_symbols=state.output_symbols + o
-                )
+                    new_input_flags = self._update_flags(transition_isymbol, state.input_flags)
+                    if new_input_flags is None:
+                        continue # flag unification failed
 
-                yield from self.run_fst(input_symbols[1:], state=new_state)
+                    o = (isymbol,) if isymbol is not None and osymbol == SpecialSymbol.IDENTITY else (osymbol,) if not osymbol.is_epsilon() else ()
 
-        epsilon_transitions = [key for key in transitions if self._is_epsilon(key)]
+                    new_state = FSTState(
+                        state_num=next_state,
+                        path_weight=state.path_weight + weight,
+                        input_flags=new_input_flags,
+                        output_flags=new_output_flags,
+                        output_symbols=state.output_symbols + o
+                    )
 
-        for eps in epsilon_transitions:
-            for next_state, osymbol, weight in transitions[eps]:
-                if self.debug:
-                    print(state.state_num, "->", next_state, eps, osymbol, input_symbols, state)
-                
-                new_output_flags = self._update_flags(osymbol, state.output_flags)
-                o = (osymbol,) if not self._is_epsilon(osymbol) else ()
-
-                if new_output_flags is None:
-                    continue # flag unification failed
-
-                new_state = state._replace(
-                    state_num=next_state,
-                    path_weight=state.path_weight + weight,
-                    output_flags=new_output_flags,
-                    output_symbols=state.output_symbols + o
-                )
-                yield from self.run_fst(input_symbols, state=new_state, post_input_advance=len(input_symbols) == 0)
+                    if transition_isymbol.is_epsilon():
+                        yield from self.run_fst(input_symbols, state=new_state, post_input_advance=len(input_symbols) == 0)
+                    
+                    else:
+                        yield from self.run_fst(input_symbols[1:], state=new_state)
     
     def lookup(self, input: str, state=FSTState(0)):
         """
@@ -242,7 +235,7 @@ class FST(NamedTuple):
             raise TokenizationException("Input cannot be split into symbols")
 
         results = self.run_fst(input_symbols, state=state)
-        results = sorted(results, key=lambda x: x[1])
+        results = sorted(results, key=lambda x: x[2].path_weight)
         already_seen = set()
         for finished, _, state in results:
             if not finished:
@@ -250,28 +243,24 @@ class FST(NamedTuple):
 
             w = state.path_weight
             os = state.output_symbols
-            o = "".join(os)
+            o = "".join(s.get_symbol() for s in os)
             if o not in already_seen:
                 yield o, w
                 already_seen.add(o)
     
-    def _update_flags(self, symbol: str, flags: frozendict[str, str]) -> frozendict[str, str] | None:
-        if self._is_flag(symbol):
-            # Parse flag
-            # Two params: @<flag type>.<flag key>.<flag value>@
-            # One param: @<flag type>.<flag key>@
-            flag = symbol[1]
-            di = symbol.rindex(".")
-            key = symbol[3:di] if di > 3 else symbol[3:-1]
-            value = symbol[di+1:-1] if di > 3 else None
+    def _update_flags(self, symbol: Symbol, flags: Map[str, tuple[bool, str]]) -> Map[str, tuple[bool, str]] | None:
+        if isinstance(symbol, FlagDiacriticSymbol):
+            flag = symbol.flag_type
+            key = symbol.key
+            value = symbol.value
             # unification flag
             if flag == "U":
                 assert value is not None
-                if key in flags and flags[key] != value and (not flags[key].startswith("@") or flags[key] == "@" + value):
-                    return None # flag mismatch
-
+                if key not in flags or (flags[key][1] == value if flags[key][0] else flags[key][1] != value):
+                    return flags.set(key, (True, value))
+                
                 else:
-                    return flags.set(key, value)
+                    return None
             
             # require flag (2 params)
             elif flag == "R" and value is not None:
@@ -316,30 +305,24 @@ class FST(NamedTuple):
             # positive (re)setting flag (2 params)
             elif flag == "P":
                 assert value is not None
-                return flags.set(key, value)
+                return flags.set(key, (True, value))
             
             # negative (re)setting flag (2 params)
             elif flag == "N":
                 assert value is not None
-                return flags.set(key, "@" + value)
+                return flags.set(key, (False, value))
         
         return flags
 
-    def _test_flag(self, stored_val: str, queried_val: str):
-        if stored_val == queried_val:
+    def _test_flag(self, stored_val: tuple[bool, str], queried_val: str):
+        if stored_val[0] and stored_val[1] == queried_val:
             return True
         
-        elif stored_val.startswith("@") and stored_val != queried_val[1:]:
+        elif not stored_val[0] and stored_val[1] != queried_val:
             return True
         
         return False
 
-    def _is_epsilon(self, symbol: str) -> bool:
-        # flag diacritics are treated like epsilon symbols
-        return symbol == "@0@" or symbol == "@_EPSILON_SYMBOL_@" or self._is_flag(symbol)
-    
-    def _is_flag(self, symbol: str) -> bool:
-        return len(symbol) > 4 and symbol[0] == "@" and symbol[-1] == "@" and symbol[1] in "PNDRCU" and symbol[2] == "."
 
 from .format.att import decode_att, encode_att
 from .format.kfst import decode_kfst, encode_kfst
@@ -360,11 +343,11 @@ def main():
         fst = FST.from_att_file(args.fst_file, debug=args.d)
     
     if args.s:
-        print(sorted(fst.symbols))
+        print(sorted(s.get_symbol() for s in fst.symbols))
         return
 
     if args.d:
-        print(sorted(fst.symbols))
+        print(sorted(s.get_symbol() for s in fst.symbols))
         print(fst.final_states)
 
     while True:
