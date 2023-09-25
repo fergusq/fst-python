@@ -169,7 +169,7 @@ class FST(NamedTuple):
             for s in self.symbols:
                 if isinstance(s, StringSymbol) and text.startswith(s.string):
                     ans.append(s)
-                    text = text[len(s):]
+                    text = text[len(s.string):]
                     break
 
             else:
