@@ -25,6 +25,7 @@ from immutables import Map
 
 from .symbols import Symbol, StringSymbol, FlagDiacriticSymbol, SpecialSymbol
 
+
 class TokenizationException(Exception):
     """Raised when failing to convert input string to symbols in KFST."""
     pass
@@ -47,7 +48,7 @@ class FST(NamedTuple):
     """
     final_states: Mapping[int, float]
     rules: Mapping[int, Mapping[Symbol, list[tuple[int, Symbol, float]]]]
-    symbols: list[Symbol] # Must be sorted in reverse order by length
+    symbols: list[Symbol]  # Must be sorted in reverse order by length
     debug: bool = False
 
     @staticmethod
@@ -153,7 +154,7 @@ class FST(NamedTuple):
 
         return encode_kfst(self)
 
-    def split_to_symbols(self, text: str) -> list[Symbol] | None:
+    def split_to_symbols(self, text: str, allow_unknown=True) -> list[Symbol] | None:
         """
         Splits a given string into a list of symbols.
         For each position in the string, greedily selects the longest symbol that matches.
@@ -173,7 +174,12 @@ class FST(NamedTuple):
                     break
 
             else:
-                return None
+                if allow_unknown:
+                    ans.append(StringSymbol(text[0], unknown=True))
+                    text = text[1:]
+                
+                else:
+                    return None
         
         return ans
 
@@ -191,36 +197,46 @@ class FST(NamedTuple):
             isymbol = input_symbols[0]
 
         for transition_isymbol in transitions:
-            if transition_isymbol.is_epsilon() or isymbol is not None and (transition_isymbol == isymbol or transition_isymbol == SpecialSymbol.UNKNOWN or transition_isymbol == SpecialSymbol.IDENTITY):
-                for next_state, osymbol, weight in transitions[transition_isymbol]:
-                    if self.debug:
-                        print(state.state_num, "->", next_state, transition_isymbol, osymbol, input_symbols, state)
-                    
-                    new_output_flags = self._update_flags(osymbol, state.output_flags)
-                    if new_output_flags is None:
-                        continue # flag unification failed
-
-                    new_input_flags = self._update_flags(transition_isymbol, state.input_flags)
-                    if new_input_flags is None:
-                        continue # flag unification failed
-
-                    o = (isymbol,) if isymbol is not None and osymbol == SpecialSymbol.IDENTITY else (osymbol,) if not osymbol.is_epsilon() else ()
-
-                    new_state = FSTState(
-                        state_num=next_state,
-                        path_weight=state.path_weight + weight,
-                        input_flags=new_input_flags,
-                        output_flags=new_output_flags,
-                        output_symbols=state.output_symbols + o
-                    )
-
-                    if transition_isymbol.is_epsilon():
-                        yield from self.run_fst(input_symbols, state=new_state, post_input_advance=len(input_symbols) == 0)
-                    
-                    else:
-                        yield from self.run_fst(input_symbols[1:], state=new_state)
+            if transition_isymbol.is_epsilon() or isymbol is not None and transition_isymbol == isymbol:
+                yield from self._transition(input_symbols, state, transitions[transition_isymbol], isymbol, transition_isymbol)
+        
+        if isymbol is not None and isymbol.is_unknown():
+            if SpecialSymbol.UNKNOWN in transitions:
+                yield from self._transition(input_symbols, state, transitions[SpecialSymbol.UNKNOWN], isymbol, SpecialSymbol.UNKNOWN)
+            
+            if SpecialSymbol.IDENTITY in transitions:
+                yield from self._transition(input_symbols, state, transitions[SpecialSymbol.IDENTITY], isymbol, SpecialSymbol.IDENTITY)
     
-    def lookup(self, input: str, state=FSTState(0)):
+    def _transition(self, input_symbols: list[Symbol], state: FSTState, transitions: list[tuple[int, Symbol, float]], isymbol: Symbol | None, transition_isymbol: Symbol) -> Generator[tuple[bool, bool, FSTState], None, None]:
+        for next_state, osymbol, weight in transitions:
+            if self.debug:
+                print(state.state_num, "->", next_state, transition_isymbol, osymbol, input_symbols, state)
+            
+            new_output_flags = self._update_flags(osymbol, state.output_flags)
+            if new_output_flags is None:
+                continue  # flag unification failed
+
+            new_input_flags = self._update_flags(transition_isymbol, state.input_flags)
+            if new_input_flags is None:
+                continue  # flag unification failed
+
+            o = (isymbol,) if isymbol is not None and osymbol == SpecialSymbol.IDENTITY else (osymbol,) if not osymbol.is_epsilon() else ()
+
+            new_state = FSTState(
+                state_num=next_state,
+                path_weight=state.path_weight + weight,
+                input_flags=new_input_flags,
+                output_flags=new_output_flags,
+                output_symbols=state.output_symbols + o
+            )
+
+            if transition_isymbol.is_epsilon():
+                yield from self.run_fst(input_symbols, state=new_state, post_input_advance=len(input_symbols) == 0)
+            
+            else:
+                yield from self.run_fst(input_symbols[1:], state=new_state)
+    
+    def lookup(self, input: str, state=FSTState(0), allow_unknown=True) -> Generator[tuple[str, float], None, None]:
         """
         Runs the FST on the given input symbols, starting from the given state (by default 0).
         Yields a tuple of (output_symbols, path_weight) for each successful path.
@@ -228,9 +244,10 @@ class FST(NamedTuple):
         Otherwise same as run_fst, but operates on strings instead of symbol lists, filters out duplicate outputs and sorts the results by weight.
 
         Raises a TokenizationException if the input string can not be converted into the symbols of the KFST transducer.
+        Note that if allow_unknown is True, all strings will be tokenized successfully.
         """
 
-        input_symbols = self.split_to_symbols(input)
+        input_symbols = self.split_to_symbols(input, allow_unknown=allow_unknown)
         if input_symbols is None:
             raise TokenizationException("Input cannot be split into symbols")
 

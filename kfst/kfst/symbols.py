@@ -13,7 +13,7 @@
 # details.
 #
 # You should have received a copy of the GNU Lesser General Public License
-# along with KFST. If not, see <https://www.gnu.org/licenses/>. 
+# along with KFST. If not, see <https://www.gnu.org/licenses/>.
 
 from enum import Enum
 from typing import Hashable, NamedTuple, Literal, Protocol
@@ -30,6 +30,12 @@ class Symbol(Hashable, Protocol):
         """
         ...
     
+    def is_unknown(self) -> bool:
+        """
+        Returns True if this symbol should be regarded as an unknown symbol.
+        """
+        ...
+    
     def get_symbol(self) -> str:
         """
         Returns the string representation of the symbol.
@@ -42,9 +48,13 @@ class StringSymbol(NamedTuple):
     Represents a symbol in the input alphabet.
     """
     string: str
+    unknown: bool = False
 
     def is_epsilon(self):
         return False
+    
+    def is_unknown(self):
+        return self.unknown
     
     def get_symbol(self):
         return self.string
@@ -60,6 +70,9 @@ class FlagDiacriticSymbol(NamedTuple):
 
     def is_epsilon(self):
         return True
+    
+    def is_unknown(self):
+        return False
     
     def get_symbol(self):
         if self.value is None:
@@ -88,7 +101,7 @@ class FlagDiacriticSymbol(NamedTuple):
         di = symbol.rindex(".")
         key = symbol[3:di] if di > 3 else symbol[3:-1]
         value = symbol[di+1:-1] if di > 3 else None
-        return FlagDiacriticSymbol(flag, key, value) # type: ignore
+        return FlagDiacriticSymbol(flag, key, value)  # type: ignore
 
 
 class SpecialSymbol(Enum):
@@ -101,6 +114,9 @@ class SpecialSymbol(Enum):
 
     def is_epsilon(self):
         return self == SpecialSymbol.EPSILON
+    
+    def is_unknown(self):
+        return False
     
     def get_symbol(self):
         return self.value
