@@ -81,7 +81,7 @@ class VoikkoAnalysis(NamedTuple):
         compound_parts.append(current_part)
 
         # Return the analysis
-        analyses = [VoikkoAnalysis._from_unitary_voikko_analysis(part) for part in compound_parts]
+        analyses = [VoikkoAnalysis._from_unitary_voikko_analysis(part) for part in compound_parts if any(p.startswith("[L") for p in part)]
 
         if len(analyses) == 1:
             return analyses[0]
