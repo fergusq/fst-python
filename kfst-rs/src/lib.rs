@@ -1554,7 +1554,7 @@ impl FST {
 
 #[test]
 fn test_kfst_voikko_kissa() {
-    let fst = FST::from_kfst_file("voikko.kfst".to_string(), false).unwrap();
+    let fst = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     assert_eq!(
         fst.lookup("kissa", FSTState::new(0), false).unwrap(),
         vec![("[Ln][Xp]kissa[X]kiss[Sn][Ny]a".to_string(), 0.0)]
@@ -1581,14 +1581,14 @@ fn test_that_weight_of_end_state_applies_correctly() {
 
 #[test]
 fn test_kfst_voikko_correct_final_states() {
-    let fst: FST = FST::from_kfst_file("voikko.kfst".to_string(), false).unwrap();
+    let fst: FST = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     let map: IndexMap<_, _> = [(19, 0.0)].into_iter().collect();
     assert_eq!(fst.final_states, map);
 }
 
 #[test]
 fn test_kfst_voikko_split() {
-    let fst: FST = FST::from_kfst_file("voikko.kfst".to_string(), false).unwrap();
+    let fst: FST = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     assert_eq!(
         fst.split_to_symbols("lentokone", false).unwrap(),
         vec![
@@ -1664,7 +1664,7 @@ fn test_kfst_voikko_split() {
 
 #[test]
 fn test_kfst_voikko() {
-    let fst = FST::from_kfst_file("voikko.kfst".to_string(), false).unwrap();
+    let fst = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     assert_eq!(
         fst.lookup("lentokone", FSTState::new(0), false).unwrap(),
         vec![(
@@ -1677,7 +1677,7 @@ fn test_kfst_voikko() {
 
 #[test]
 fn test_kfst_voikko_lentää() {
-    let fst = FST::from_kfst_file("voikko.kfst".to_string(), false).unwrap();
+    let fst = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     assert_eq!(
         fst.lookup("lentää", FSTState::new(0), false).unwrap(),
         vec![
@@ -1692,7 +1692,7 @@ fn test_kfst_voikko_lentää() {
 
 #[test]
 fn test_kfst_voikko_lentää_correct_states() {
-    let fst = FST::from_kfst_file("voikko.kfst".to_string(), false).unwrap();
+    let fst = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     let input_symbols = fst.split_to_symbols("lentää", false).unwrap();
 
     // Correct number of states for different subsequence lengths per KFST
@@ -1762,7 +1762,7 @@ fn test_minimal_r_diacritic() {
 
 #[test]
 fn test_kfst_voikko_lentää_result_count() {
-    let fst = FST::from_kfst_file("voikko.kfst".to_string(), false).unwrap();
+    let fst = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     let input_symbols = fst.split_to_symbols("lentää", false).unwrap();
 
     // Correct number of states for different subsequence lengths per KFST
@@ -1881,7 +1881,7 @@ fn test_kfst_voikko_paragraph() {
         vec![("[Ln][Xp]sapatti[X]sapat[Sg][Ny]in[Bh][Bc][Ln][Xp]päivä[X]päiv[Sg][Ny]än", 0)],
         vec![("[Lt][Xp]pyhittää[X]pyhittä[Ln]m[Xj]ä[X][Rm]ä[Sab][Ny]ttä", 0), ("[Lt][Xp]pyhittää[X]pyhittä[Tn3][Ny][Sab]mättä", 0)],
     ];
-    let fst = FST::from_kfst_file("voikko.kfst".to_string(), false).unwrap();
+    let fst = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     for (word, gold) in words.into_iter().zip(gold.into_iter()) {
         let sys = fst.lookup(word, FSTState::new(0), false).unwrap();
         assert_eq!(
