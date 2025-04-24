@@ -741,9 +741,9 @@ impl FST {
         input_symbols: &[Symbol],
         state: &FSTState,
         post_input_advance: bool,
-    ) -> Vec<(bool, bool, FSTState)> {
+        result: &mut Vec<(bool, bool, FSTState)>
+    ) {
         let transitions = self.rules.get(&state.state_num);
-        let mut result = vec![];
         let isymbol = if input_symbols.is_empty() {
             match self.final_states.get(&state.state_num) {
                 Some(&weight) => {
@@ -772,13 +772,14 @@ impl FST {
         if let Some(transitions) = transitions {
             for transition_isymbol in transitions.keys() {
                 if transition_isymbol.is_epsilon() || isymbol == Some(transition_isymbol) {
-                    result.extend(self._transition(
+                    self._transition(
                         input_symbols,
                         state,
                         &transitions[transition_isymbol],
                         isymbol,
                         transition_isymbol,
-                    ))
+                        result
+                    );
                 }
             }
             if let Some(isymbol) = isymbol {
@@ -786,30 +787,31 @@ impl FST {
                     if let Some(transition_list) =
                         transitions.get(&Symbol::Special(SpecialSymbol::UNKNOWN))
                     {
-                        result.extend(self._transition(
+                        self._transition(
                             input_symbols,
                             state,
                             &transition_list,
                             Some(isymbol),
                             &Symbol::Special(SpecialSymbol::UNKNOWN),
-                        ));
+                            result
+                        );
                     }
 
                     if let Some(transition_list) =
                         transitions.get(&Symbol::Special(SpecialSymbol::IDENTITY))
                     {
-                        result.extend(self._transition(
+                        self._transition(
                             input_symbols,
                             state,
                             &transition_list,
                             Some(isymbol),
                             &Symbol::Special(SpecialSymbol::IDENTITY),
-                        ));
+                            result
+                        );
                     }
                 }
             }
         }
-        result
     }
 
     fn _transition(
@@ -819,8 +821,8 @@ impl FST {
         transitions: &[(u64, Symbol, f64)],
         isymbol: Option<&Symbol>,
         transition_isymbol: &Symbol,
-    ) -> Vec<(bool, bool, FSTState)> {
-        let mut result = vec![];
+        result: &mut Vec<(bool, bool, FSTState)>
+    ) -> () {
 
         for (next_state, osymbol, weight) in transitions.iter() {
             let new_output_flags = _update_flags(osymbol, &state.output_flags);
@@ -845,20 +847,20 @@ impl FST {
                         output_symbols: new_output_symbols,
                     };
                     if transition_isymbol.is_epsilon() {
-                        result.extend(self._run_fst(
+                        self._run_fst(
                             input_symbols,
                             &new_state,
                             input_symbols.is_empty(),
-                        ));
+                            result
+                        );
                     } else {
                         let cloned_symbols = &input_symbols[1..];
-                        result.extend(self._run_fst(cloned_symbols, &new_state, false));
+                        self._run_fst(cloned_symbols, &new_state, false, result);
                     }
                 }
                 _ => continue,
             }
         }
-        result
     }
 
     fn from_att_rows(
@@ -1506,7 +1508,9 @@ impl FST {
         state: FSTState,
         post_input_advance: bool,
     ) -> Vec<(bool, bool, FSTState)> {
-        self._run_fst(input_symbols.as_slice(), &state, post_input_advance)
+        let mut result = vec![];
+        self._run_fst(input_symbols.as_slice(), &state, post_input_advance, &mut result);
+        result
     }
 
     #[pyo3(signature = (input, state=FSTState::new(0), allow_unknown=false))]
@@ -1751,7 +1755,9 @@ fn test_kfst_voikko_lentää_correct_states() {
 fn test_minimal_r_diacritic() {
     let code = "0\t1\t@P.V_SALLITTU.T@\tasetus\n1\t2\t@R.V_SALLITTU.T@\ttarkistus\n2";
     let fst = FST::from_att_code(code.to_string(), false).unwrap();
-    for x in fst._run_fst(&[], &FSTState::new(0), false) {
+    let mut result = vec![];
+    fst._run_fst(&[], &FSTState::new(0), false, &mut result);
+    for x in result {
         println!("{:?}", x);
     }
     assert_eq!(
@@ -1777,6 +1783,13 @@ fn test_kfst_voikko_lentää_result_count() {
             results[i]
         );
     }
+}
+
+#[test]
+fn does_not_crash_on_unknown() {
+    let fst = FST::from_att_code("0\t1\ta\tb\n1".to_string(), false).unwrap();
+    assert_eq!(fst.lookup("c", FSTState::new(0), true).unwrap(), vec![]);
+    assert!(fst.lookup("c", FSTState::new(0), false).is_err());
 }
 
 #[test]
