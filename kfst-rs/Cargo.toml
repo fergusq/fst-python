@@ -9,6 +9,7 @@ name = "kfst_rs"
 crate-type = ["cdylib"]
 
 [dependencies]
+im = "15.1.0"
 indexmap = "2.9.0"
 lzma-rs = "0.3.0"
 nom = "8.0.0"

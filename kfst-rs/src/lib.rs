@@ -3,6 +3,7 @@ use std::fs::{self, File};
 use std::hash::Hash;
 use std::io::Read;
 use std::path::Path;
+use std::fmt::Debug;
 
 use indexmap::{IndexMap, IndexSet};
 use lzma_rs::lzma_compress;
@@ -12,6 +13,7 @@ use nom::multi::many_m_n;
 use nom::Parser;
 use pyo3::create_exception;
 use pyo3::exceptions::{PyIOError, PyValueError};
+use pyo3::types::PyDict;
 use pyo3::{prelude::*, py_run, IntoPyObjectExt};
 
 create_exception!(
@@ -22,9 +24,14 @@ create_exception!(
 
 // symbols.py
 
-#[derive(Debug)]
 struct PyObjectSymbol {
     value: PyObject,
+}
+
+impl Debug for PyObjectSymbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Python::with_gil(|py| f.write_str(self.value.getattr(py, "__repr__").unwrap().call0(py).unwrap().extract(py).unwrap()))
+    }
 }
 
 impl PartialEq for PyObjectSymbol {
@@ -676,10 +683,32 @@ impl FromPyObject<'_> for Symbol {
             .or_else(|_| ob.extract().map(Symbol::External))
     }
 }
+#[derive(Clone, Debug, PartialEq, Hash)]
+pub struct FlagMap(im::HashMap<String, (bool, String)>);
+
+impl FromPyObject<'_> for FlagMap {
+    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let as_index_map: std::collections::HashMap<String, (bool, String)> = ob.extract()?;
+        let as_map: im::HashMap<_, _> = as_index_map.into_iter().collect();
+        Ok(FlagMap(as_map))
+    }
+}
+
+impl<'py> IntoPyObject<'py> for FlagMap {
+    type Target = PyDict;
+
+    type Output = Bound<'py, Self::Target>;
+
+    type Error = pyo3::PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        self.0.into_iter().collect::<std::collections::HashMap<_, _>>().into_pyobject(py)
+    }
+}
 
 // transducer.py
 
-#[pyclass(frozen)]
+#[pyclass(frozen, eq, hash)]
 #[derive(Clone, Debug, PartialEq)]
 struct FSTState {
     #[pyo3(get)]
@@ -687,27 +716,50 @@ struct FSTState {
     #[pyo3(get)]
     path_weight: f64,
     #[pyo3(get)]
-    input_flags: IndexMap<String, (bool, String)>,
+    input_flags: FlagMap,
     #[pyo3(get)]
-    output_flags: IndexMap<String, (bool, String)>,
+    output_flags: FlagMap,
     #[pyo3(get)]
     output_symbols: Vec<Symbol>,
+}
+
+impl Hash for FSTState {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.state_num.hash(state);
+        self.path_weight.to_be_bytes().hash(state);
+        self.input_flags.hash(state);
+        self.output_flags.hash(state);
+        self.output_symbols.hash(state);
+    }
 }
 
 fn _test_flag(stored_val: &(bool, String), queried_val: &str) -> bool {
     stored_val.0 == (stored_val.1 == queried_val)
 }
 
-#[pymethods]
 impl FSTState {
-    #[new]
-    fn new(state: u64) -> Self {
+    fn _new(state: u64) -> Self {
         FSTState {
             state_num: state,
             path_weight: 0.0,
-            input_flags: IndexMap::new(),
-            output_flags: IndexMap::new(),
-            output_symbols: Vec::new(),
+            input_flags: FlagMap(im::HashMap::new()),
+            output_flags: FlagMap(im::HashMap::new()),
+            output_symbols: vec![],
+        }
+    }
+}
+
+#[pymethods]
+impl FSTState {
+    #[new]
+    #[pyo3(signature = (state, path_weight=0.0, input_flags=IndexMap::new(), output_flags=IndexMap::new(), output_symbols=vec![]))]
+    fn new(state: u64, path_weight: f64, input_flags: IndexMap<String, (bool, String)>, output_flags: IndexMap<String, (bool, String)>, output_symbols: Vec<Symbol>) -> Self {
+        FSTState {
+            state_num: state,
+            path_weight: path_weight,
+            input_flags: FlagMap(input_flags.into_iter().collect()),
+            output_flags: FlagMap(output_flags.into_iter().collect()),
+            output_symbols: output_symbols,
         }
     }
 
@@ -825,8 +877,8 @@ impl FST {
     ) -> () {
 
         for (next_state, osymbol, weight) in transitions.iter() {
-            let new_output_flags = _update_flags(osymbol, &state.output_flags);
-            let new_input_flags = _update_flags(transition_isymbol, &state.input_flags);
+            let new_output_flags = _update_flags(osymbol, &state.output_flags.0);
+            let new_input_flags = _update_flags(transition_isymbol, &state.input_flags.0);
 
             match (new_output_flags, new_input_flags) {
                 (Some(new_output_flags), Some(new_input_flags)) => {
@@ -842,8 +894,8 @@ impl FST {
                     let new_state = FSTState {
                         state_num: *next_state,
                         path_weight: state.path_weight + *weight,
-                        input_flags: new_input_flags,
-                        output_flags: new_output_flags,
+                        input_flags: FlagMap(new_input_flags),
+                        output_flags: FlagMap(new_output_flags),
                         output_symbols: new_output_symbols,
                     };
                     if transition_isymbol.is_epsilon() {
@@ -1185,8 +1237,8 @@ impl FST {
 
 fn _update_flags(
     symbol: &Symbol,
-    flags: &IndexMap<String, (bool, String)>,
-) -> Option<IndexMap<String, (bool, String)>> {
+    flags: &im::HashMap<String, (bool, String)>,
+) -> Option<im::HashMap<String, (bool, String)>> {
     if let Symbol::Flag(flag_diacritic_symbol) = symbol {
         match flag_diacritic_symbol.flag_type {
             FlagDiacriticType::U => {
@@ -1253,7 +1305,7 @@ fn _update_flags(
             }
             FlagDiacriticType::C => {
                 let mut flag_clone = flags.clone();
-                flag_clone.swap_remove(&flag_diacritic_symbol.key);
+                flag_clone.remove(&flag_diacritic_symbol.key);
                 Some(flag_clone)
             }
             FlagDiacriticType::P => {
@@ -1501,7 +1553,7 @@ impl FST {
         Some(result)
     }
 
-    #[pyo3(signature = (input_symbols, state = FSTState::new(0), post_input_advance = false))]
+    #[pyo3(signature = (input_symbols, state = FSTState::_new(0), post_input_advance = false))]
     fn run_fst(
         &self,
         input_symbols: Vec<Symbol>,
@@ -1513,7 +1565,7 @@ impl FST {
         result
     }
 
-    #[pyo3(signature = (input, state=FSTState::new(0), allow_unknown=false))]
+    #[pyo3(signature = (input, state=FSTState::_new(0), allow_unknown=false))]
     fn lookup(
         &self,
         input: &str,
@@ -1560,11 +1612,11 @@ impl FST {
 fn test_kfst_voikko_kissa() {
     let fst = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     assert_eq!(
-        fst.lookup("kissa", FSTState::new(0), false).unwrap(),
+        fst.lookup("kissa", FSTState::_new(0), false).unwrap(),
         vec![("[Ln][Xp]kissa[X]kiss[Sn][Ny]a".to_string(), 0.0)]
     );
     assert_eq!(
-        fst.lookup("kissojemmekaan", FSTState::new(0), false)
+        fst.lookup("kissojemmekaan", FSTState::_new(0), false)
             .unwrap(),
         vec![(
             "[Ln][Xp]kissa[X]kiss[Sg][Nm]oje[O1m]mme[Fkaan]kaan".to_string(),
@@ -1578,7 +1630,7 @@ fn test_that_weight_of_end_state_applies_correctly() {
     let code = "0\t1\ta\tb\n1\t1.0";
     let fst = FST::from_att_code(code.to_string(), false).unwrap();
     assert_eq!(
-        fst.lookup("a", FSTState::new(0), false).unwrap(),
+        fst.lookup("a", FSTState::_new(0), false).unwrap(),
         vec![("b".to_string(), 1.0)]
     );
 }
@@ -1670,7 +1722,7 @@ fn test_kfst_voikko_split() {
 fn test_kfst_voikko() {
     let fst = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     assert_eq!(
-        fst.lookup("lentokone", FSTState::new(0), false).unwrap(),
+        fst.lookup("lentokone", FSTState::_new(0), false).unwrap(),
         vec![(
             "[Lt][Xp]lentää[X]len[Ln][Xj]to[X]to[Sn][Ny][Bh][Bc][Ln][Xp]kone[X]kone[Sn][Ny]"
                 .to_string(),
@@ -1683,7 +1735,7 @@ fn test_kfst_voikko() {
 fn test_kfst_voikko_lentää() {
     let fst = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     assert_eq!(
-        fst.lookup("lentää", FSTState::new(0), false).unwrap(),
+        fst.lookup("lentää", FSTState::_new(0), false).unwrap(),
         vec![
             (
                 "[Lt][Xp]lentää[X]len[Tt][Ap][P3][Ny][Ef]tää".to_string(),
@@ -1742,7 +1794,7 @@ fn test_kfst_voikko_lentää_correct_states() {
     for i in 0..=input_symbols.len() {
         let subsequence = &input_symbols[..i];
         let mut states: Vec<_> = fst
-            .run_fst(subsequence.to_vec(), FSTState::new(0), false)
+            .run_fst(subsequence.to_vec(), FSTState::_new(0), false)
             .into_iter()
             .map(|(_, _, x)| x.state_num)
             .collect();
@@ -1756,12 +1808,12 @@ fn test_minimal_r_diacritic() {
     let code = "0\t1\t@P.V_SALLITTU.T@\tasetus\n1\t2\t@R.V_SALLITTU.T@\ttarkistus\n2";
     let fst = FST::from_att_code(code.to_string(), false).unwrap();
     let mut result = vec![];
-    fst._run_fst(&[], &FSTState::new(0), false, &mut result);
+    fst._run_fst(&[], &FSTState::_new(0), false, &mut result);
     for x in result {
         println!("{:?}", x);
     }
     assert_eq!(
-        fst.lookup("", FSTState::new(0), false).unwrap(),
+        fst.lookup("", FSTState::_new(0), false).unwrap(),
         vec![("asetustarkistus".to_string(), 0.0)]
     );
 }
@@ -1778,7 +1830,7 @@ fn test_kfst_voikko_lentää_result_count() {
     for i in 0..=input_symbols.len() {
         let subsequence = &input_symbols[..i];
         assert_eq!(
-            fst.run_fst(subsequence.to_vec(), FSTState::new(0), false)
+            fst.run_fst(subsequence.to_vec(), FSTState::_new(0), false)
                 .len(),
             results[i]
         );
@@ -1788,8 +1840,8 @@ fn test_kfst_voikko_lentää_result_count() {
 #[test]
 fn does_not_crash_on_unknown() {
     let fst = FST::from_att_code("0\t1\ta\tb\n1".to_string(), false).unwrap();
-    assert_eq!(fst.lookup("c", FSTState::new(0), true).unwrap(), vec![]);
-    assert!(fst.lookup("c", FSTState::new(0), false).is_err());
+    assert_eq!(fst.lookup("c", FSTState::_new(0), true).unwrap(), vec![]);
+    assert!(fst.lookup("c", FSTState::_new(0), false).is_err());
 }
 
 #[test]
@@ -1896,7 +1948,7 @@ fn test_kfst_voikko_paragraph() {
     ];
     let fst = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     for (word, gold) in words.into_iter().zip(gold.into_iter()) {
-        let sys = fst.lookup(word, FSTState::new(0), false).unwrap();
+        let sys = fst.lookup(word, FSTState::_new(0), false).unwrap();
         assert_eq!(
             sys,
             gold.iter()
@@ -1914,7 +1966,7 @@ fn test_simple_unknown() {
     assert_eq!(
         fst.run_fst(
             vec![Symbol::String(StringSymbol::new("x".to_string(), false,))],
-            FSTState::new(0),
+            FSTState::_new(0),
             false,
         ),
         vec![]
@@ -1923,7 +1975,7 @@ fn test_simple_unknown() {
     assert_eq!(
         fst.run_fst(
             vec![Symbol::String(StringSymbol::new("x".to_string(), true,))],
-            FSTState::new(0),
+            FSTState::_new(0),
             false,
         ),
         vec![(
@@ -1932,8 +1984,8 @@ fn test_simple_unknown() {
             FSTState {
                 state_num: 1,
                 path_weight: 0.0,
-                input_flags: IndexMap::new(),
-                output_flags: IndexMap::new(),
+                input_flags: FlagMap(im::HashMap::new()),
+                output_flags: FlagMap(im::HashMap::new()),
                 output_symbols: vec![Symbol::String(StringSymbol::new("y".to_string(), false))]
             }
         )]
@@ -1948,7 +2000,7 @@ fn test_simple_identity() {
     assert_eq!(
         fst.run_fst(
             vec![Symbol::String(StringSymbol::new("x".to_string(), false,))],
-            FSTState::new(0),
+            FSTState::_new(0),
             false,
         ),
         vec![]
@@ -1957,7 +2009,7 @@ fn test_simple_identity() {
     assert_eq!(
         fst.run_fst(
             vec![Symbol::String(StringSymbol::new("x".to_string(), true,))],
-            FSTState::new(0),
+            FSTState::_new(0),
             false,
         ),
         vec![(
@@ -1966,8 +2018,8 @@ fn test_simple_identity() {
             FSTState {
                 state_num: 1,
                 path_weight: 0.0,
-                input_flags: IndexMap::new(),
-                output_flags: IndexMap::new(),
+                input_flags: FlagMap(im::HashMap::new()),
+                output_flags: FlagMap(im::HashMap::new()),
                 output_symbols: vec![Symbol::String(StringSymbol::new("x".to_string(), true))]
             }
         )]
