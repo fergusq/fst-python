@@ -1556,6 +1556,7 @@ impl FST {
 
     #[staticmethod]
     #[pyo3(signature = (kfst_bytes, debug = false))]
+    #[allow(unused)]
     fn from_kfst_bytes(kfst_bytes: &[u8], debug: bool) -> PyResult<FST> {
         match FST::_from_kfst_bytes(kfst_bytes) {
             Ok(x) => Ok(x),
