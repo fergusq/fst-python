@@ -1,4 +1,4 @@
-#!/home/theof/git/fst-python/general-tests/venv/bin/python3
+#!./venv/bin/python
 import hfst
 import kfst
 import kfst_rs
