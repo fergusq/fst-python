@@ -242,7 +242,7 @@ impl PyObjectSymbol {
 #[derive(Clone, Hash, PartialEq, Eq)]
 struct StringSymbol {
     #[pyo3(get)]
-    string: String,
+    string: u32,
     #[pyo3(get)]
     unknown: bool,
 }
@@ -342,9 +342,9 @@ impl FlagDiacriticType {
 struct FlagDiacriticSymbol {
     flag_type: FlagDiacriticType,
     #[pyo3(get)]
-    key: String,
+    key: u32,
     #[pyo3(get)]
-    value: Option<String>,
+    value: u32,
 }
 
 impl PartialOrd for FlagDiacriticSymbol {
