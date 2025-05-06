@@ -15,12 +15,25 @@ use pyo3::create_exception;
 use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::types::PyDict;
 use pyo3::{prelude::*, py_run, IntoPyObjectExt};
+use std::sync::{LazyLock, Mutex};
 
 create_exception!(
     kfst_rs,
     TokenizationException,
     pyo3::exceptions::PyException
 );
+
+// Symbol interning
+
+static STRING_INTERNER: LazyLock<Mutex<IndexSet<String>>> = LazyLock::new(|| Mutex::new(IndexSet::new()));
+
+fn intern(s: String) -> u32 {
+    u32::try_from(STRING_INTERNER.lock().unwrap().insert_full(s).0).unwrap()
+}
+
+fn deintern(idx: u32) -> String {
+    STRING_INTERNER.lock().unwrap().get_index(idx.try_into().unwrap()).unwrap().clone()
+}
 
 // symbols.py
 
@@ -252,7 +265,7 @@ impl StringSymbol {
         Ok((
             "",
             StringSymbol {
-                string: symbol.to_string(),
+                string: intern(symbol.to_string()),
                 unknown: false,
             },
         ))
@@ -286,12 +299,12 @@ impl StringSymbol {
     }
 
     fn get_symbol(&self) -> String {
-        self.string.clone()
+        deintern(self.string)
     }
 
     #[new]
     fn new(string: String, unknown: bool) -> Self {
-        StringSymbol { string, unknown }
+        StringSymbol { string: intern(string), unknown: unknown }
     }
 
     fn __repr__(&self) -> String {
@@ -383,16 +396,16 @@ impl FlagDiacriticSymbol {
         };
 
         let (name, value) = if !named_piece_1.is_empty() {
-            (named_piece_1[0].0, Some(named_piece_2.to_string()))
+            (named_piece_1[0].0, intern(named_piece_2.to_string()))
         } else {
-            (named_piece_2, None)
+            (named_piece_2, u32::MAX)
         };
 
         Ok((
             input,
             FlagDiacriticSymbol {
                 flag_type: diacritic_type,
-                key: name.to_string(),
+                key: intern(name.to_string()),
                 value,
             },
         ))
@@ -410,9 +423,9 @@ impl FlagDiacriticSymbol {
     }
 
     fn get_symbol(&self) -> String {
-        match &self.value {
-            None => format!("@{:?}.{}@", self.flag_type, self.key),
-            Some(value) => format!("@{:?}.{}.{}@", self.flag_type, self.key, value),
+        match self.value {
+            u32::MAX => format!("@{:?}.{}@", self.flag_type, deintern(self.key)),
+            value => format!("@{:?}.{}.{}@", self.flag_type, deintern(self.key), deintern(value)),
         }
     }
 
@@ -432,18 +445,18 @@ impl FlagDiacriticSymbol {
             )))?,
         };
         Ok(FlagDiacriticSymbol {
-            flag_type,
-            key,
-            value,
+            flag_type: flag_type,
+            key: intern(key),
+            value: value.map(intern).unwrap_or(u32::MAX),
         })
     }
 
     fn __repr__(&self) -> String {
-        match &self.value {
-            None => format!("FlagDiacriticSymbol({:?}, {:?})", self.flag_type, self.key),
-            Some(value) => format!(
+        match self.value {
+            u32::MAX => format!("FlagDiacriticSymbol({:?}, {:?})", self.flag_type, deintern(self.key)),
+            value => format!(
                 "FlagDiacriticSymbol({:?}, {:?}, {:?})",
-                self.flag_type, self.key, value
+                self.flag_type, deintern(self.key), deintern(value)
             ),
         }
     }
@@ -684,12 +697,12 @@ impl FromPyObject<'_> for Symbol {
     }
 }
 #[derive(Clone, Debug, PartialEq, Hash)]
-pub struct FlagMap(im::HashMap<String, (bool, String)>);
+pub struct FlagMap(im::HashMap<u32, (bool, u32)>);
 
 impl FromPyObject<'_> for FlagMap {
     fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
         let as_index_map: std::collections::HashMap<String, (bool, String)> = ob.extract()?;
-        let as_map: im::HashMap<_, _> = as_index_map.into_iter().collect();
+        let as_map: im::HashMap<_, _> = as_index_map.into_iter().map(|(key, value)| (intern(key), (value.0, intern(value.1)))).collect();
         Ok(FlagMap(as_map))
     }
 }
@@ -733,7 +746,7 @@ impl Hash for FSTState {
     }
 }
 
-fn _test_flag(stored_val: &(bool, String), queried_val: &str) -> bool {
+fn _test_flag(stored_val: &(bool, u32), queried_val: u32) -> bool {
     stored_val.0 == (stored_val.1 == queried_val)
 }
 
@@ -757,8 +770,8 @@ impl FSTState {
         FSTState {
             state_num: state,
             path_weight: path_weight,
-            input_flags: FlagMap(input_flags.into_iter().collect()),
-            output_flags: FlagMap(output_flags.into_iter().collect()),
+            input_flags: FlagMap(input_flags.into_iter().map(|(key, value)| (intern(key), (value.0, intern(value.1)))).collect()),
+            output_flags: FlagMap(output_flags.into_iter().map(|(key, value)| (intern(key), (value.0, intern(value.1)))).collect()),
             output_symbols: output_symbols,
         }
     }
@@ -1237,12 +1250,12 @@ impl FST {
 
 fn _update_flags(
     symbol: &Symbol,
-    flags: &im::HashMap<String, (bool, String)>,
-) -> Option<im::HashMap<String, (bool, String)>> {
+    flags: &im::HashMap<u32, (bool, u32)>,
+) -> Option<im::HashMap<u32, (bool, u32)>> {
     if let Symbol::Flag(flag_diacritic_symbol) = symbol {
         match flag_diacritic_symbol.flag_type {
             FlagDiacriticType::U => {
-                let value = flag_diacritic_symbol.value.clone().unwrap();
+                let value = flag_diacritic_symbol.value;
 
                 // Is the current state somehow in conflict?
                 // It can be, if we are negatively set to what we try to unify to or we are positively set to sth else
@@ -1258,15 +1271,22 @@ fn _update_flags(
 
                 // Otherwise, update flag set
 
-                let mut clone = flags.clone();
+                let mut clone: im::HashMap<u32, (bool, u32)> = flags.clone();
                 clone.insert(flag_diacritic_symbol.key.clone(), (true, value));
                 Some(clone)
             }
             FlagDiacriticType::R => {
                 // Param count matters
 
-                match &flag_diacritic_symbol.value {
-                    Some(value) => {
+                match flag_diacritic_symbol.value {
+                    u32::MAX => {
+                        if flags.contains_key(&flag_diacritic_symbol.key) {
+                            Some(flags.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    value => {
                         if flags
                             .get(&flag_diacritic_symbol.key)
                             .map(|stored| _test_flag(stored, value))
@@ -1277,24 +1297,17 @@ fn _update_flags(
                             None
                         }
                     }
-                    None => {
-                        if flags.contains_key(&flag_diacritic_symbol.key) {
-                            Some(flags.clone())
-                        } else {
-                            None
-                        }
-                    }
                 }
             }
             FlagDiacriticType::D => {
                 match (
-                    &flag_diacritic_symbol.value,
+                    flag_diacritic_symbol.value,
                     flags.get(&flag_diacritic_symbol.key),
                 ) {
-                    (None, None) => Some(flags.clone()),
-                    (None, Some(_)) => None,
-                    (Some(_), None) => Some(flags.clone()),
-                    (Some(query), Some(stored)) => {
+                    (u32::MAX, None) => Some(flags.clone()),
+                    (u32::MAX, _) => None,
+                    (_, None) => Some(flags.clone()),
+                    (query, Some(stored)) => {
                         if _test_flag(stored, query) {
                             None
                         } else {
@@ -1309,13 +1322,13 @@ fn _update_flags(
                 Some(flag_clone)
             }
             FlagDiacriticType::P => {
-                let value = flag_diacritic_symbol.value.clone().unwrap();
+                let value = flag_diacritic_symbol.value;
                 let mut flag_clone = flags.clone();
                 flag_clone.insert(flag_diacritic_symbol.key.clone(), (true, value));
                 Some(flag_clone)
             }
             FlagDiacriticType::N => {
-                let value = flag_diacritic_symbol.value.clone().unwrap();
+                let value = flag_diacritic_symbol.value;
                 let mut flag_clone = flags.clone();
                 flag_clone.insert(flag_diacritic_symbol.key.clone(), (false, value));
                 Some(flag_clone)
@@ -1543,7 +1556,7 @@ impl FST {
             }
             if allow_unknown {
                 result.push(Symbol::String(StringSymbol {
-                    string: pos.next().unwrap().to_string(),
+                    string: intern(pos.next().unwrap().to_string()),
                     unknown: true,
                 }));
             } else {
@@ -1649,39 +1662,39 @@ fn test_kfst_voikko_split() {
         fst.split_to_symbols("lentokone", false).unwrap(),
         vec![
             Symbol::String(StringSymbol {
-                string: "l".to_string(),
+                string: intern("l".to_string()),
                 unknown: false
             }),
             Symbol::String(StringSymbol {
-                string: "e".to_string(),
+                string: intern("e".to_string()),
                 unknown: false
             }),
             Symbol::String(StringSymbol {
-                string: "n".to_string(),
+                string: intern("n".to_string()),
                 unknown: false
             }),
             Symbol::String(StringSymbol {
-                string: "t".to_string(),
+                string: intern("t".to_string()),
                 unknown: false
             }),
             Symbol::String(StringSymbol {
-                string: "o".to_string(),
+                string: intern("o".to_string()),
                 unknown: false
             }),
             Symbol::String(StringSymbol {
-                string: "k".to_string(),
+                string: intern("k".to_string()),
                 unknown: false
             }),
             Symbol::String(StringSymbol {
-                string: "o".to_string(),
+                string: intern("o".to_string()),
                 unknown: false
             }),
             Symbol::String(StringSymbol {
-                string: "n".to_string(),
+                string: intern("n".to_string()),
                 unknown: false
             }),
             Symbol::String(StringSymbol {
-                string: "e".to_string(),
+                string: intern("e".to_string()),
                 unknown: false
             }),
         ]
@@ -1691,27 +1704,27 @@ fn test_kfst_voikko_split() {
         fst.split_to_symbols("lentää", false).unwrap(),
         vec![
             Symbol::String(StringSymbol {
-                string: "l".to_string(),
+                string: intern("l".to_string()),
                 unknown: false
             }),
             Symbol::String(StringSymbol {
-                string: "e".to_string(),
+                string: intern("e".to_string()),
                 unknown: false
             }),
             Symbol::String(StringSymbol {
-                string: "n".to_string(),
+                string: intern("n".to_string()),
                 unknown: false
             }),
             Symbol::String(StringSymbol {
-                string: "t".to_string(),
+                string: intern("t".to_string()),
                 unknown: false
             }),
             Symbol::String(StringSymbol {
-                string: "ä".to_string(),
+                string: intern("ä".to_string()),
                 unknown: false
             }),
             Symbol::String(StringSymbol {
-                string: "ä".to_string(),
+                string: intern("ä".to_string()),
                 unknown: false
             }),
         ]
@@ -1947,8 +1960,9 @@ fn test_kfst_voikko_paragraph() {
         vec![("[Lt][Xp]pyhittää[X]pyhittä[Ln]m[Xj]ä[X][Rm]ä[Sab][Ny]ttä", 0), ("[Lt][Xp]pyhittää[X]pyhittä[Tn3][Ny][Sab]mättä", 0)],
     ];
     let fst = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
-    for (word, gold) in words.into_iter().zip(gold.into_iter()) {
+    for (idx, (word, gold)) in words.into_iter().zip(gold.into_iter()).enumerate() {
         let sys = fst.lookup(word, FSTState::_new(0), false).unwrap();
+        println!("Word at: {}", idx);
         assert_eq!(
             sys,
             gold.iter()
