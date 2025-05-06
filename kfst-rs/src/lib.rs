@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
+use std::fmt::Debug;
 use std::fs::{self, File};
 use std::hash::Hash;
 use std::io::Read;
 use std::path::Path;
-use std::fmt::Debug;
 
 use indexmap::{IndexMap, IndexSet};
 use lzma_rs::lzma_compress;
@@ -25,14 +25,20 @@ create_exception!(
 
 // Symbol interning
 
-static STRING_INTERNER: LazyLock<Mutex<IndexSet<String>>> = LazyLock::new(|| Mutex::new(IndexSet::new()));
+static STRING_INTERNER: LazyLock<Mutex<IndexSet<String>>> =
+    LazyLock::new(|| Mutex::new(IndexSet::new()));
 
 fn intern(s: String) -> u32 {
     u32::try_from(STRING_INTERNER.lock().unwrap().insert_full(s).0).unwrap()
 }
 
 fn deintern(idx: u32) -> String {
-    STRING_INTERNER.lock().unwrap().get_index(idx.try_into().unwrap()).unwrap().clone()
+    STRING_INTERNER
+        .lock()
+        .unwrap()
+        .get_index(idx.try_into().unwrap())
+        .unwrap()
+        .clone()
 }
 
 // symbols.py
@@ -43,7 +49,17 @@ struct PyObjectSymbol {
 
 impl Debug for PyObjectSymbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Python::with_gil(|py| f.write_str(self.value.getattr(py, "__repr__").unwrap().call0(py).unwrap().extract(py).unwrap()))
+        Python::with_gil(|py| {
+            f.write_str(
+                self.value
+                    .getattr(py, "__repr__")
+                    .unwrap()
+                    .call0(py)
+                    .unwrap()
+                    .extract(py)
+                    .unwrap(),
+            )
+        })
     }
 }
 
@@ -304,7 +320,10 @@ impl StringSymbol {
 
     #[new]
     fn new(string: String, unknown: bool) -> Self {
-        StringSymbol { string: intern(string), unknown: unknown }
+        StringSymbol {
+            string: intern(string),
+            unknown,
+        }
     }
 
     fn __repr__(&self) -> String {
@@ -425,7 +444,12 @@ impl FlagDiacriticSymbol {
     fn get_symbol(&self) -> String {
         match self.value {
             u32::MAX => format!("@{:?}.{}@", self.flag_type, deintern(self.key)),
-            value => format!("@{:?}.{}.{}@", self.flag_type, deintern(self.key), deintern(value)),
+            value => format!(
+                "@{:?}.{}.{}@",
+                self.flag_type,
+                deintern(self.key),
+                deintern(value)
+            ),
         }
     }
 
@@ -445,7 +469,7 @@ impl FlagDiacriticSymbol {
             )))?,
         };
         Ok(FlagDiacriticSymbol {
-            flag_type: flag_type,
+            flag_type,
             key: intern(key),
             value: value.map(intern).unwrap_or(u32::MAX),
         })
@@ -453,10 +477,16 @@ impl FlagDiacriticSymbol {
 
     fn __repr__(&self) -> String {
         match self.value {
-            u32::MAX => format!("FlagDiacriticSymbol({:?}, {:?})", self.flag_type, deintern(self.key)),
+            u32::MAX => format!(
+                "FlagDiacriticSymbol({:?}, {:?})",
+                self.flag_type,
+                deintern(self.key)
+            ),
             value => format!(
                 "FlagDiacriticSymbol({:?}, {:?}, {:?})",
-                self.flag_type, deintern(self.key), deintern(value)
+                self.flag_type,
+                deintern(self.key),
+                deintern(value)
             ),
         }
     }
@@ -702,7 +732,10 @@ pub struct FlagMap(im::HashMap<u32, (bool, u32)>);
 impl FromPyObject<'_> for FlagMap {
     fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
         let as_index_map: std::collections::HashMap<String, (bool, String)> = ob.extract()?;
-        let as_map: im::HashMap<_, _> = as_index_map.into_iter().map(|(key, value)| (intern(key), (value.0, intern(value.1)))).collect();
+        let as_map: im::HashMap<_, _> = as_index_map
+            .into_iter()
+            .map(|(key, value)| (intern(key), (value.0, intern(value.1))))
+            .collect();
         Ok(FlagMap(as_map))
     }
 }
@@ -715,7 +748,10 @@ impl<'py> IntoPyObject<'py> for FlagMap {
     type Error = pyo3::PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
-        self.0.into_iter().collect::<std::collections::HashMap<_, _>>().into_pyobject(py)
+        self.0
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>()
+            .into_pyobject(py)
     }
 }
 
@@ -766,13 +802,29 @@ impl FSTState {
 impl FSTState {
     #[new]
     #[pyo3(signature = (state, path_weight=0.0, input_flags=IndexMap::new(), output_flags=IndexMap::new(), output_symbols=vec![]))]
-    fn new(state: u64, path_weight: f64, input_flags: IndexMap<String, (bool, String)>, output_flags: IndexMap<String, (bool, String)>, output_symbols: Vec<Symbol>) -> Self {
+    fn new(
+        state: u64,
+        path_weight: f64,
+        input_flags: IndexMap<String, (bool, String)>,
+        output_flags: IndexMap<String, (bool, String)>,
+        output_symbols: Vec<Symbol>,
+    ) -> Self {
         FSTState {
             state_num: state,
-            path_weight: path_weight,
-            input_flags: FlagMap(input_flags.into_iter().map(|(key, value)| (intern(key), (value.0, intern(value.1)))).collect()),
-            output_flags: FlagMap(output_flags.into_iter().map(|(key, value)| (intern(key), (value.0, intern(value.1)))).collect()),
-            output_symbols: output_symbols,
+            path_weight,
+            input_flags: FlagMap(
+                input_flags
+                    .into_iter()
+                    .map(|(key, value)| (intern(key), (value.0, intern(value.1))))
+                    .collect(),
+            ),
+            output_flags: FlagMap(
+                output_flags
+                    .into_iter()
+                    .map(|(key, value)| (intern(key), (value.0, intern(value.1))))
+                    .collect(),
+            ),
+            output_symbols,
         }
     }
 
@@ -806,7 +858,7 @@ impl FST {
         input_symbols: &[Symbol],
         state: &FSTState,
         post_input_advance: bool,
-        result: &mut Vec<(bool, bool, FSTState)>
+        result: &mut Vec<(bool, bool, FSTState)>,
     ) {
         let transitions = self.rules.get(&state.state_num);
         let isymbol = if input_symbols.is_empty() {
@@ -843,7 +895,7 @@ impl FST {
                         &transitions[transition_isymbol],
                         isymbol,
                         transition_isymbol,
-                        result
+                        result,
                     );
                 }
             }
@@ -855,10 +907,10 @@ impl FST {
                         self._transition(
                             input_symbols,
                             state,
-                            &transition_list,
+                            transition_list,
                             Some(isymbol),
                             &Symbol::Special(SpecialSymbol::UNKNOWN),
-                            result
+                            result,
                         );
                     }
 
@@ -868,10 +920,10 @@ impl FST {
                         self._transition(
                             input_symbols,
                             state,
-                            &transition_list,
+                            transition_list,
                             Some(isymbol),
                             &Symbol::Special(SpecialSymbol::IDENTITY),
-                            result
+                            result,
                         );
                     }
                 }
@@ -886,9 +938,8 @@ impl FST {
         transitions: &[(u64, Symbol, f64)],
         isymbol: Option<&Symbol>,
         transition_isymbol: &Symbol,
-        result: &mut Vec<(bool, bool, FSTState)>
-    ) -> () {
-
+        result: &mut Vec<(bool, bool, FSTState)>,
+    ) {
         for (next_state, osymbol, weight) in transitions.iter() {
             let new_output_flags = _update_flags(osymbol, &state.output_flags.0);
             let new_input_flags = _update_flags(transition_isymbol, &state.input_flags.0);
@@ -912,12 +963,7 @@ impl FST {
                         output_symbols: new_output_symbols,
                     };
                     if transition_isymbol.is_epsilon() {
-                        self._run_fst(
-                            input_symbols,
-                            &new_state,
-                            input_symbols.is_empty(),
-                            result
-                        );
+                        self._run_fst(input_symbols, &new_state, input_symbols.is_empty(), result);
                     } else {
                         let cloned_symbols = &input_symbols[1..];
                         self._run_fst(cloned_symbols, &new_state, false, result);
@@ -1272,7 +1318,7 @@ fn _update_flags(
                 // Otherwise, update flag set
 
                 let mut clone: im::HashMap<u32, (bool, u32)> = flags.clone();
-                clone.insert(flag_diacritic_symbol.key.clone(), (true, value));
+                clone.insert(flag_diacritic_symbol.key, (true, value));
                 Some(clone)
             }
             FlagDiacriticType::R => {
@@ -1324,13 +1370,13 @@ fn _update_flags(
             FlagDiacriticType::P => {
                 let value = flag_diacritic_symbol.value;
                 let mut flag_clone = flags.clone();
-                flag_clone.insert(flag_diacritic_symbol.key.clone(), (true, value));
+                flag_clone.insert(flag_diacritic_symbol.key, (true, value));
                 Some(flag_clone)
             }
             FlagDiacriticType::N => {
                 let value = flag_diacritic_symbol.value;
                 let mut flag_clone = flags.clone();
-                flag_clone.insert(flag_diacritic_symbol.key.clone(), (false, value));
+                flag_clone.insert(flag_diacritic_symbol.key, (false, value));
                 Some(flag_clone)
             }
         }
@@ -1574,7 +1620,12 @@ impl FST {
         post_input_advance: bool,
     ) -> Vec<(bool, bool, FSTState)> {
         let mut result = vec![];
-        self._run_fst(input_symbols.as_slice(), &state, post_input_advance, &mut result);
+        self._run_fst(
+            input_symbols.as_slice(),
+            &state,
+            post_input_advance,
+            &mut result,
+        );
         result
     }
 
@@ -1650,14 +1701,16 @@ fn test_that_weight_of_end_state_applies_correctly() {
 
 #[test]
 fn test_kfst_voikko_correct_final_states() {
-    let fst: FST = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
+    let fst: FST =
+        FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     let map: IndexMap<_, _> = [(19, 0.0)].into_iter().collect();
     assert_eq!(fst.final_states, map);
 }
 
 #[test]
 fn test_kfst_voikko_split() {
-    let fst: FST = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
+    let fst: FST =
+        FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     assert_eq!(
         fst.split_to_symbols("lentokone", false).unwrap(),
         vec![
