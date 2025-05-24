@@ -18,7 +18,7 @@
 import argparse
 from pathlib import Path
 
-from .transducer import FST
+from . import transducer
 
 
 def main():
@@ -27,7 +27,7 @@ def main():
     parser.add_argument("output", type=Path, help="output KFST transducer path")
     args = parser.parse_args()
 
-    fst = FST.from_att_file(args.input)
+    fst = transducer.FST.from_att_file(args.input)
     fst.to_kfst_file(args.output)
 
 
