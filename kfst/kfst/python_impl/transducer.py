@@ -17,14 +17,14 @@
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 from typing import Generator, Mapping, NamedTuple
 
 from immutables import Map
 
 from .symbols import Symbol, StringSymbol, FlagDiacriticSymbol, SpecialSymbol
-
+from .format.att import decode_att, encode_att
+from .format.kfst import decode_kfst, encode_kfst
 
 class TokenizationException(Exception):
     """Raised when failing to convert input string to symbols in KFST."""
@@ -352,44 +352,3 @@ class FST(NamedTuple):
         The Rust sibling of this function then allows only returning the relevant symbols to Python instead of the whole ruleset.
         """
         return set(self.rules[state.state_num].keys())
-
-
-from .format.att import decode_att, encode_att
-from .format.kfst import decode_kfst, encode_kfst
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Finite State Transducer interpreter written in Python")
-    parser.add_argument("fst_file", type=Path, help="FST in AT&T or KFST format")
-    parser.add_argument("-d", action="store_true", help="enable debug mode")
-    parser.add_argument("-s", action="store_true", help="print symbols in transducer and exit")
-    parser.add_argument("-f", choices=["att", "kfst", "auto"], default="auto", help="force input format")
-    args = parser.parse_args()
-
-    if args.fst_file.suffix == ".kfst" if args.f == "auto" else args.f == "kfst":
-        fst =  FST.from_kfst_file(args.fst_file, debug=args.d)
-    
-    else:
-        fst = FST.from_att_file(args.fst_file, debug=args.d)
-    
-    if args.s:
-        print(sorted(s.get_symbol() for s in fst.symbols))
-        return
-
-    if args.d:
-        print(sorted(s.get_symbol() for s in fst.symbols))
-        print(fst.final_states)
-
-    while True:
-        try:
-            text = input("> ")
-
-        except EOFError:
-            break
-
-        for output, w in fst.lookup(text):
-            print(output, w)
-
-if __name__ == "__main__":
-    main()
-

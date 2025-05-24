@@ -40,3 +40,7 @@ if TYPE_CHECKING or BACKEND == "kfst":
     from .python_impl import transducer as transducer
     from .python_impl import format as format
     BACKEND = "kfst"
+
+# Make the pure-python impl available anyway
+
+from . import python_impl as python_impl
