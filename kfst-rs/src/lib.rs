@@ -1,11 +1,12 @@
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::fs::{self, File};
 use std::hash::Hash;
 use std::io::Read;
 use std::path::Path;
 
-use indexmap::{IndexMap, IndexSet};
+use indexmap::{IndexMap, IndexSet, indexmap};
 use lzma_rs::lzma_compress;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_until1};
@@ -42,6 +43,36 @@ fn deintern(idx: u32) -> String {
 }
 
 // symbols.py
+#[pyclass(str = "RawSymbol({value:?})", eq, ord, frozen, hash)]
+#[derive(Clone, Copy, Hash, PartialEq, PartialOrd, Ord, Eq, Debug)]
+struct RawSymbol {
+    #[pyo3(get)]
+    value: [u8; 15] // First byte is reserved: the lsb is is_epsilon and the second lsb is is_unknown
+}
+
+#[pymethods]
+impl RawSymbol {
+    fn is_epsilon(&self) -> bool {
+        (self.value[0] & 1) != 0
+    }
+
+    fn is_unknown(&self) -> bool {
+        (self.value[0] & 2) != 0
+    }
+
+    fn get_symbol(&self) -> String {
+        format!("RawSymbol({:?})", self.value)
+    }
+
+    #[new]
+    fn new(value: [u8; 15]) -> Self {
+        RawSymbol { value }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("RawSymbol({:?})", self.value)
+    }
+}
 
 struct PyObjectSymbol {
     value: PyObject,
@@ -268,7 +299,7 @@ impl PyObjectSymbol {
 }
 
 #[pyclass(str = "StringSymbol({string:?}, {unknown})", eq, ord, frozen, hash)]
-#[derive(Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
 struct StringSymbol {
     #[pyo3(get)]
     string: u32,
@@ -332,7 +363,7 @@ impl StringSymbol {
 }
 
 #[pyclass(eq, ord, frozen)]
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Hash)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Copy, Hash)]
 enum FlagDiacriticType {
     U,
     R,
@@ -370,7 +401,7 @@ impl FlagDiacriticType {
     frozen,
     hash
 )]
-#[derive(PartialEq, Eq, Clone, Hash)]
+#[derive(PartialEq, Eq, Clone, Copy, Hash)]
 struct FlagDiacriticSymbol {
     flag_type: FlagDiacriticType,
     #[pyo3(get)]
@@ -513,7 +544,7 @@ impl std::fmt::Debug for FlagDiacriticSymbol {
 }
 
 #[pyclass(eq, ord, frozen, hash)]
-#[derive(PartialEq, Eq, Clone, Hash)]
+#[derive(PartialEq, Eq, Clone, Hash, Copy)]
 enum SpecialSymbol {
     EPSILON,
     IDENTITY,
@@ -612,6 +643,7 @@ enum Symbol {
     Flag(FlagDiacriticSymbol),
     String(StringSymbol),
     External(PyObjectSymbol),
+    Raw(RawSymbol),
 }
 
 impl<'py> IntoPyObject<'py> for Symbol {
@@ -627,6 +659,7 @@ impl<'py> IntoPyObject<'py> for Symbol {
             Symbol::Flag(flag_diacritic_symbol) => flag_diacritic_symbol.into_bound_py_any(py),
             Symbol::String(string_symbol) => string_symbol.into_bound_py_any(py),
             Symbol::External(pyobject_symbol) => pyobject_symbol.into_bound_py_any(py),
+            Symbol::Raw(raw_symbol) => raw_symbol.into_bound_py_any(py),
         }
     }
 }
@@ -645,6 +678,7 @@ impl Ord for Symbol {
             (Symbol::Flag(a), Symbol::Flag(b)) => a.cmp(b),
             (Symbol::String(a), Symbol::String(b)) => a.cmp(b),
             (Symbol::External(a), Symbol::External(b)) => a.cmp(b),
+            (Symbol::Raw(a), Symbol::Raw(b)) => a.cmp(b),
 
             // If we have different types of symbols, they can't be strictly equal
             // First, defer to the natural (reverse :D) ordering of strings
@@ -676,6 +710,7 @@ impl Symbol {
             Symbol::Flag(flag_diacritic_symbol) => flag_diacritic_symbol.is_epsilon(),
             Symbol::String(string_symbol) => string_symbol.is_epsilon(),
             Symbol::External(py_object_symbol) => py_object_symbol.is_epsilon(),
+            Symbol::Raw(raw_symbol) => raw_symbol.is_epsilon(),
         }
     }
 
@@ -685,6 +720,7 @@ impl Symbol {
             Symbol::Flag(flag_diacritic_symbol) => flag_diacritic_symbol.is_unknown(),
             Symbol::String(string_symbol) => string_symbol.is_unknown(),
             Symbol::External(py_object_symbol) => py_object_symbol.is_unknown(),
+            Symbol::Raw(raw_symbol) => raw_symbol.is_unknown(),
         }
     }
 
@@ -694,6 +730,7 @@ impl Symbol {
             Symbol::Flag(flag_diacritic_symbol) => flag_diacritic_symbol.get_symbol(),
             Symbol::String(string_symbol) => string_symbol.get_symbol(),
             Symbol::External(py_object_symbol) => py_object_symbol.get_symbol(),
+            Symbol::Raw(raw_symbol) => raw_symbol.get_symbol(),
         }
     }
 
@@ -724,6 +761,7 @@ impl FromPyObject<'_> for Symbol {
             .or_else(|_| ob.extract().map(Symbol::Flag))
             .or_else(|_| ob.extract().map(Symbol::String))
             .or_else(|_| ob.extract().map(Symbol::External))
+            .or_else(|_| ob.extract().map(Symbol::Raw))
     }
 }
 #[derive(Clone, Debug, PartialEq, Hash)]
@@ -1671,6 +1709,10 @@ impl FST {
             }
         }
     }
+
+    fn get_input_symbols(&self, state: FSTState) -> HashSet<Symbol> {
+        self.rules[&state.state_num].keys().map(|x| x.clone()).collect()
+    }
 }
 
 #[test]
@@ -2094,6 +2136,37 @@ fn test_simple_identity() {
     );
 }
 
+#[test]
+fn test_raw_symbols() {
+
+    // Construct simple transducer
+
+    let mut rules: IndexMap<u64, IndexMap<Symbol, Vec<(u64, Symbol, f64)>>> = IndexMap::new();
+    let sym_a = Symbol::Raw(RawSymbol { value: [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] });
+    let sym_b = Symbol::Raw(RawSymbol { value: [0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] });
+    let sym_c = Symbol::Raw(RawSymbol { value: [0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] });
+    let special_epsilon = Symbol::Raw(RawSymbol { value: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] });
+    let sym_d = Symbol::Raw(RawSymbol { value: [0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] });
+    let sym_d_unk = Symbol::Raw(RawSymbol { value: [2, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] });
+    rules.insert(0, indexmap!(sym_a.clone() => vec![(1, sym_a.clone(), 0.0)]));
+    rules.insert(1, indexmap!(sym_b.clone() => vec![(0, sym_b.clone(), 0.0)], Symbol::Special(SpecialSymbol::IDENTITY) => vec![(2, Symbol::Special(SpecialSymbol::IDENTITY), 0.0)]));
+    rules.insert(2, indexmap!(special_epsilon.clone() => vec![(3, sym_c.clone(), 0.0)]));
+    let symbols = vec![sym_a.clone(), sym_b.clone(), sym_c.clone(), special_epsilon];
+    let fst = FST { final_states: indexmap! {3 => 0.0} , rules, symbols, debug: false };
+
+    // Accepting example that tests epsilon + unknown bits
+
+    let result = fst.run_fst(vec![sym_a.clone(), sym_b.clone(), sym_a.clone(), sym_d_unk.clone()], FSTState::_new(0), false);
+    let filtered: Vec<_> = result.into_iter().filter(|x| x.0).collect();
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].2.state_num, 3);
+    assert_eq!(filtered[0].2.output_symbols, vec![sym_a.clone(), sym_b.clone(), sym_a.clone(), sym_d_unk.clone(), sym_c.clone()]);
+
+    // Rejecting example that further tests the unknown bit
+
+    assert_eq!(fst.run_fst(vec![sym_a.clone(), sym_b.clone(), sym_a.clone(), sym_d.clone()], FSTState::_new(0), false).into_iter().filter(|x| x.0).count(), 0);
+}
+
 /// A Python module implemented in Rust.
 #[pymodule]
 fn kfst_rs(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -2102,6 +2175,7 @@ fn kfst_rs(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     symbols.add_class::<FlagDiacriticType>()?;
     symbols.add_class::<FlagDiacriticSymbol>()?;
     symbols.add_class::<SpecialSymbol>()?;
+    symbols.add_class::<RawSymbol>()?;
     symbols.add_function(wrap_pyfunction!(from_symbol_string, m)?)?;
 
     py_run!(
