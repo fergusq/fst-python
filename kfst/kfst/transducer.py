@@ -340,6 +340,19 @@ class FST(NamedTuple):
         
         return False
 
+    def get_input_symbols(self, state: FSTState) -> set[Symbol]:
+        """
+        Get input symbols (disregarding flags) that one could continue from a state with.
+        In other words, get the deduplicated input symbols on all outgoing arcs from a state.
+
+        The body of this function is fairly trivial, as it boils down to indexing rules with state.state_num.
+        In practice this function exists for compatibility with kfst_rs: calling fst.rules on a fst defined in Rust
+        means converting the whole rule mapping from Rust's representation to Python's and cloning all the symbols within.
+        Indexing would then be done on the python side.  It is possible and correct, but becomes a bottleneck if inside a tight loop.
+        The Rust sibling of this function then allows only returning the relevant symbols to Python instead of the whole ruleset.
+        """
+        return set(self.rules[state.state_num].keys())
+
 
 from .format.att import decode_att, encode_att
 from .format.kfst import decode_kfst, encode_kfst

@@ -43,6 +43,45 @@ class Symbol(Hashable, Protocol):
         ...
 
 
+class RawSymbol(bytes):
+    """
+    Represents a symbol that is a vehicle for caller-defined bytes.
+    The Python implementation of this type mostly exists to maintain compatibility with the Rust implementation.
+    If you care more about legibility than performance or end up running the Python version of kfst for some other reason,
+    the natural way to define custom symbol types is to subclass Symbol.
+
+    RawSymbols (as implemented in kfst_rs; again, this code exists only for compatibility) is especially useful
+    if you run kfst_rs and want a symbol with custom metadata and good performance.
+    It holds the answers to is_epsilon and is_unknown in the first byte, thus avoiding a GIL locking + python execution
+    to get that information. (This comes with the assumption that epsilon- and unknown status doesn't change)
+
+    RawSymbol holds a payload of exactly 15 bytes, out of which 14 are caller-defined. 15 is chosen such that it can fit
+    in 16 bytes (a size set by other symbol types) with a one-byte discriminant. The bytes have the following interpretation:
+
+    - The lsb of the first byte is 1 if this symbol should be read as epsilon and 0 otherwise.
+    - The second lsb of the first byte is 1 if this symbol should be read as unknown and 0 otherwise.
+    - The rest of the first byte is reserved.
+    - Bytes from the second onwards are caller-defined.
+    
+    Unlike other Symbol types, this is a subclass of bytes to achieve both immutability and length-validation.
+    """
+
+    def __new__(cls, value: bytes):
+        if len(value) == 15:
+            return super(RawSymbol, cls).__new__(cls, value)
+        else:
+            raise ValueError(f"RawSymbol should have a payload of exactly 15 bytes; len({repr(value)}) == {len(value)}")
+
+    def is_epsilon(self):
+        return (self[0] & 1) != 0
+    
+    def is_unknown(self):
+        return (self[0] & 2) != 0
+    
+    def get_symbol(self):
+        return f"RawSymbol({repr(self)})"
+
+
 class StringSymbol(NamedTuple):
     """
     Represents a symbol in the input alphabet.
