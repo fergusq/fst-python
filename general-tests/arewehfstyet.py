@@ -1,7 +1,8 @@
 #!./venv/bin/python
 import hfst
+import kfst_py
 import kfst
-import kfst_rs
+assert kfst.BACKEND == "kfst_rs"
 import timeit
 
 paragraph = [
@@ -109,8 +110,8 @@ def test(fst):
     for text in paragraph:
         list(fst.lookup(text))
 
-pyfst = kfst.transducer.FST.from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst")
-rsfst = kfst_rs.transducer.FST.from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst")
+pyfst = kfst_py.transducer.FST.from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst")
+rsfst = kfst.transducer.FST.from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst")
 istr = hfst.HfstInputStream("voikko.hfst.ol")
 hyfst = istr.read()
 istr.close()
