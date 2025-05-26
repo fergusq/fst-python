@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::fmt::Debug;
+use std::fmt::{Debug, Error};
 use std::fs::{self, File};
 use std::hash::Hash;
 use std::io::Read;
@@ -10,14 +10,60 @@ use indexmap::{IndexMap, IndexSet, indexmap};
 use lzma_rs::lzma_compress;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_until1};
+use nom::combinator::value;
 use nom::multi::many_m_n;
 use nom::Parser;
-use pyo3::create_exception;
-use pyo3::exceptions::{PyIOError, PyValueError};
-use pyo3::types::PyDict;
-use pyo3::{prelude::*, py_run, IntoPyObjectExt};
 use std::sync::{LazyLock, Mutex};
 
+#[cfg(feature = "python")]
+use pyo3::create_exception;
+#[cfg(feature = "python")]
+use pyo3::exceptions::{PyIOError, PyValueError};
+#[cfg(feature = "python")]
+use pyo3::types::PyDict;
+#[cfg(feature = "python")]
+use pyo3::{prelude::*, py_run, IntoPyObjectExt};
+
+// We have result types that kinda depend on the target
+// If we target pyo3, we want python results and errors
+// Otherwise, we want stdlib errors
+
+#[cfg(feature = "python")]
+type KFSTResult<T> = PyResult<T>;
+#[cfg(not(feature = "python"))]
+type KFSTResult<T> = std::result::Result<T, String>;
+
+#[cfg(feature = "python")]
+fn value_error<T>(msg: String) -> KFSTResult<T> {
+    KFSTResult::Err(PyErr::new::<PyValueError, _>(msg))
+}
+#[cfg(not(feature = "python"))]
+fn value_error<T>(msg: String) -> KFSTResult<T> {
+    KFSTResult::Err(msg)
+}
+
+#[cfg(feature = "python")]
+fn io_error<T>(msg: String) -> KFSTResult<T> {
+    use pyo3::exceptions::PyIOError;
+
+    KFSTResult::Err(PyErr::new::<PyIOError, _>(msg))
+}
+#[cfg(not(feature = "python"))]
+fn io_error<T>(msg: String) -> KFSTResult<T> {
+    KFSTResult::Err(msg)
+}
+
+#[cfg(feature = "python")]
+fn tokenization_exception<T>(msg: String) -> KFSTResult<T> {
+    KFSTResult::Err(PyErr::new::<TokenizationException, _>(msg))
+}
+#[cfg(not(feature = "python"))]
+fn tokenization_exception<T>(msg: String) -> KFSTResult<T> {
+    KFSTResult::Err(msg)
+}
+
+
+#[cfg(feature = "python")]
 create_exception!(
     kfst_rs,
     TokenizationException,
@@ -43,14 +89,14 @@ fn deintern(idx: u32) -> String {
 }
 
 // symbols.py
-#[pyclass(str = "RawSymbol({value:?})", eq, ord, frozen, hash)]
+
+#[cfg_attr(feature = "python", pyclass(str = "RawSymbol({value:?})", eq, ord, frozen, hash, get_all))]
 #[derive(Clone, Copy, Hash, PartialEq, PartialOrd, Ord, Eq, Debug)]
 struct RawSymbol {
-    #[pyo3(get)]
     value: [u8; 15] // First byte is reserved: the lsb is is_epsilon and the second lsb is is_unknown
 }
 
-#[pymethods]
+#[cfg_attr(feature = "python", pymethods)]
 impl RawSymbol {
     fn is_epsilon(&self) -> bool {
         (self.value[0] & 1) != 0
@@ -64,7 +110,13 @@ impl RawSymbol {
         format!("RawSymbol({:?})", self.value)
     }
 
+    #[cfg(feature = "python")]
     #[new]
+    fn new(value: [u8; 15]) -> Self {
+        RawSymbol { value }
+    }
+
+    #[cfg(not(feature = "python"))]
     fn new(value: [u8; 15]) -> Self {
         RawSymbol { value }
     }
@@ -74,10 +126,12 @@ impl RawSymbol {
     }
 }
 
+#[cfg(feature = "python")]
 struct PyObjectSymbol {
     value: PyObject,
 }
 
+#[cfg(feature = "python")]
 impl Debug for PyObjectSymbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Python::with_gil(|py| {
@@ -94,6 +148,7 @@ impl Debug for PyObjectSymbol {
     }
 }
 
+#[cfg(feature = "python")]
 impl PartialEq for PyObjectSymbol {
     fn eq(&self, other: &Self) -> bool {
         Python::with_gil(|py| {
@@ -115,6 +170,7 @@ impl PartialEq for PyObjectSymbol {
     }
 }
 
+#[cfg(feature = "python")]
 impl Hash for PyObjectSymbol {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         state.write_i128(Python::with_gil(|py| {
@@ -141,14 +197,17 @@ impl Hash for PyObjectSymbol {
     }
 }
 
+#[cfg(feature = "python")]
 impl Eq for PyObjectSymbol {}
 
+#[cfg(feature = "python")]
 impl PartialOrd for PyObjectSymbol {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
+#[cfg(feature = "python")]
 impl Ord for PyObjectSymbol {
     fn cmp(&self, other: &Self) -> Ordering {
         Python::with_gil(|py| {
@@ -196,6 +255,7 @@ impl Ord for PyObjectSymbol {
     }
 }
 
+#[cfg(feature = "python")]
 impl Clone for PyObjectSymbol {
     fn clone(&self) -> Self {
         Python::with_gil(|py| Self {
@@ -204,6 +264,7 @@ impl Clone for PyObjectSymbol {
     }
 }
 
+#[cfg(feature = "python")]
 impl FromPyObject<'_> for PyObjectSymbol {
     fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
         Ok(PyObjectSymbol {
@@ -212,6 +273,7 @@ impl FromPyObject<'_> for PyObjectSymbol {
     }
 }
 
+#[cfg(feature = "python")]
 impl<'py> IntoPyObject<'py> for PyObjectSymbol {
     type Target = PyAny;
 
@@ -224,6 +286,7 @@ impl<'py> IntoPyObject<'py> for PyObjectSymbol {
     }
 }
 
+#[cfg(feature = "python")]
 impl PyObjectSymbol {
     fn is_epsilon(&self) -> bool {
         Python::with_gil(|py| {
@@ -298,12 +361,10 @@ impl PyObjectSymbol {
     }
 }
 
-#[pyclass(str = "StringSymbol({string:?}, {unknown})", eq, ord, frozen, hash)]
+#[cfg_attr(feature = "python", pyclass(str = "StringSymbol({string:?}, {unknown})", eq, ord, frozen, hash, get_all))]
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 struct StringSymbol {
-    #[pyo3(get)]
     string: u32,
-    #[pyo3(get)]
     unknown: bool,
 }
 
@@ -335,7 +396,7 @@ impl Ord for StringSymbol {
     }
 }
 
-#[pymethods]
+#[cfg_attr(feature = "python", pymethods)]
 impl StringSymbol {
     fn is_epsilon(&self) -> bool {
         false
@@ -349,7 +410,16 @@ impl StringSymbol {
         deintern(self.string)
     }
 
+    #[cfg(feature = "python")]
     #[new]
+    fn new(string: String, unknown: bool) -> Self {
+        StringSymbol {
+            string: intern(string),
+            unknown,
+        }
+    }
+
+    #[cfg(not(feature = "python"))]
     fn new(string: String, unknown: bool) -> Self {
         StringSymbol {
             string: intern(string),
@@ -362,7 +432,7 @@ impl StringSymbol {
     }
 }
 
-#[pyclass(eq, ord, frozen)]
+#[cfg_attr(feature = "python", pyclass(eq, ord, frozen))]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Copy, Hash)]
 enum FlagDiacriticType {
     U,
@@ -387,26 +457,24 @@ impl FlagDiacriticType {
     }
 }
 
-#[pymethods]
+#[cfg_attr(feature = "python", pymethods)]
 impl FlagDiacriticType {
     fn __repr__(&self) -> String {
         format!("{:?}", &self)
     }
 }
 
-#[pyclass(
+#[cfg_attr(feature = "python", pyclass(
     str = "FlagDiacriticSymbol({flag_type:?}, {key:?}, {value:?})",
     eq,
     ord,
     frozen,
     hash
-)]
+))]
 #[derive(PartialEq, Eq, Clone, Copy, Hash)]
 struct FlagDiacriticSymbol {
     flag_type: FlagDiacriticType,
-    #[pyo3(get)]
     key: u32,
-    #[pyo3(get)]
     value: u32,
 }
 
@@ -462,7 +530,47 @@ impl FlagDiacriticSymbol {
     }
 }
 
-#[pymethods]
+// These functions have some non-trivial pyo3-attributes that cannot be cfg_attr'ed in and non-trivial content
+// Need to be specified in separate impl block
+
+impl FlagDiacriticSymbol {
+    fn _from_symbol_string(symbol: &str) -> KFSTResult<Self> {
+        match FlagDiacriticSymbol::parse(symbol) {
+            Ok(("", symbol)) => KFSTResult::Ok(symbol),
+            Ok((rest, _)) => value_error(format!("String {:?} contains a valid FlagDiacriticSymbol, but it has unparseable text at the end: {:?}", symbol, rest)),
+            _ => value_error(format!("Not a valid FlagDiacriticSymbol: {:?}", symbol))
+        }
+    }
+
+    #[cfg(not(feature = "python"))]
+    fn from_symbol_string(symbol: &str) -> KFSTResult<Self> {
+        FlagDiacriticSymbol::_from_symbol_string(symbol)
+    }
+
+    fn _new(flag_type: String, key: String, value: Option<String>) -> KFSTResult<Self> {
+        let flag_type = match FlagDiacriticType::from_str(&flag_type) {
+            Some(x) => x,
+            None => value_error(format!(
+                    "String {:?} is not a valid FlagDiacriticType specifier",
+                    flag_type))?
+        };
+        Ok(FlagDiacriticSymbol {
+            flag_type,
+            key: intern(key),
+            value: value.map(intern).unwrap_or(u32::MAX),
+        })
+    }
+
+
+    #[cfg(not(feature = "python"))]
+    fn new(flag_type: String, key: String, value: Option<String>) -> KFSTResult<Self> {
+        FlagDiacriticSymbol::_new(flag_type, key, value)
+    }
+
+
+}
+
+#[cfg_attr(feature = "python", pymethods)]
 impl FlagDiacriticSymbol {
     fn is_epsilon(&self) -> bool {
         true
@@ -484,26 +592,34 @@ impl FlagDiacriticSymbol {
         }
     }
 
+    #[cfg(feature = "python")]
     #[getter]
     fn flag_type(&self) -> String {
         format!("{:?}", self.flag_type)
     }
 
+    #[cfg(not(feature = "python"))]
+    fn flag_type(&self) -> String {
+        format!("{:?}", self.flag_type)
+    }
+
+    #[cfg(feature = "python")]
+    #[getter]
+    fn key(&self) -> u32 {
+        self.key
+    }
+
+    #[cfg(feature = "python")]
+    #[getter]
+    fn value(&self) -> u32 {
+        self.value
+    }
+
+    #[cfg(feature = "python")]
     #[new]
     #[pyo3(signature = (flag_type, key, value = None))]
-    fn new(flag_type: String, key: String, value: Option<String>) -> PyResult<Self> {
-        let flag_type = match FlagDiacriticType::from_str(&flag_type) {
-            Some(x) => x,
-            None => PyResult::Err(PyErr::new::<PyValueError, _>(format!(
-                "String {:?} is not a valid FlagDiacriticType specifier",
-                flag_type
-            )))?,
-        };
-        Ok(FlagDiacriticSymbol {
-            flag_type,
-            key: intern(key),
-            value: value.map(intern).unwrap_or(u32::MAX),
-        })
+    fn new(flag_type: String, key: String, value: Option<String>) -> KFSTResult<Self> {
+        FlagDiacriticSymbol::_new(flag_type, key, value)
     }
 
     fn __repr__(&self) -> String {
@@ -522,19 +638,23 @@ impl FlagDiacriticSymbol {
         }
     }
 
+    #[cfg(feature = "python")]
     #[staticmethod]
     fn is_flag_diacritic(symbol: &str) -> bool {
         matches!(FlagDiacriticSymbol::parse(symbol), Ok(("", _)))
     }
 
-    #[staticmethod]
-    fn from_symbol_string(symbol: &str) -> PyResult<Self> {
-        match FlagDiacriticSymbol::parse(symbol) {
-            Ok(("", symbol)) => PyResult::Ok(symbol),
-            Ok((rest, _)) => PyResult::Err(PyErr::new::<PyValueError, _>(format!("String {:?} contains a valid FlagDiacriticSymbol, but it has unparseable text at the end: {:?}", symbol, rest))),
-            _ => PyResult::Err(PyErr::new::<PyValueError, _>(format!("Not a valid FlagDiacriticSymbol: {:?}", symbol)))
-        }
+    #[cfg(not(feature = "python"))]
+    fn is_flag_diacritic(symbol: &str) -> bool {
+        matches!(FlagDiacriticSymbol::parse(symbol), Ok(("", _)))
     }
+
+    #[cfg(feature = "python")]
+    #[staticmethod]
+    fn from_symbol_string(symbol: &str) -> KFSTResult<Self> {
+        FlagDiacriticSymbol::_from_symbol_string(symbol)
+    }
+
 }
 
 impl std::fmt::Debug for FlagDiacriticSymbol {
@@ -543,7 +663,7 @@ impl std::fmt::Debug for FlagDiacriticSymbol {
     }
 }
 
-#[pyclass(eq, ord, frozen, hash)]
+#[cfg_attr(feature = "python", pyclass(eq, ord, frozen, hash))]
 #[derive(PartialEq, Eq, Clone, Hash, Copy)]
 enum SpecialSymbol {
     EPSILON,
@@ -570,6 +690,22 @@ impl SpecialSymbol {
         };
         Ok((rest, sym))
     }
+
+    fn _from_symbol_string(symbol: &str) -> KFSTResult<Self> {
+        match SpecialSymbol::parse(symbol) {
+            Ok(("", result)) => KFSTResult::Ok(result),
+            _ => value_error(format!(
+                "Not a valid SpecialSymbol: {:?}",
+                symbol
+            )),
+        }
+    }
+
+    #[cfg(not(feature = "python"))]
+    fn from_symbol_string(symbol: &str) -> KFSTResult<Self> {
+        SpecialSymbol::_from_symbol_string(symbol)
+    }
+
 }
 
 impl PartialOrd for SpecialSymbol {
@@ -585,7 +721,7 @@ impl Ord for SpecialSymbol {
     }
 }
 
-#[pymethods]
+#[cfg_attr(feature = "python", pymethods)]
 impl SpecialSymbol {
     fn is_epsilon(&self) -> bool {
         self == &SpecialSymbol::EPSILON
@@ -603,18 +739,19 @@ impl SpecialSymbol {
         }
     }
 
+    #[cfg(feature = "python")]
     #[staticmethod]
-    fn from_symbol_string(symbol: &str) -> PyResult<Self> {
-        match SpecialSymbol::parse(symbol) {
-            Ok(("", result)) => PyResult::Ok(result),
-            _ => PyResult::Err(PyErr::new::<PyValueError, _>(format!(
-                "Not a valid SpecialSymbol: {:?}",
-                symbol
-            ))),
-        }
+    fn from_symbol_string(symbol: &str) -> KFSTResult<Self> {
+        SpecialSymbol::_from_symbol_string(symbol)
     }
 
+    #[cfg(feature = "python")]
     #[staticmethod]
+    fn is_special_symbol(symbol: &str) -> bool {
+        SpecialSymbol::from_symbol_string(symbol).is_ok()
+    }
+
+    #[cfg(not(feature = "python"))]
     fn is_special_symbol(symbol: &str) -> bool {
         SpecialSymbol::from_symbol_string(symbol).is_ok()
     }
@@ -632,9 +769,15 @@ impl std::fmt::Debug for StringSymbol {
     }
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn from_symbol_string(symbol: &str, py: Python) -> PyResult<Py<PyAny>> {
     Symbol::parse(symbol).unwrap().1.into_py_any(py)
+}
+
+#[cfg(not(feature = "python"))]
+fn from_symbol_string(symbol: &str) -> Option<Symbol> {
+    Symbol::parse(symbol).ok().map(|(_, sym)| sym)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -642,10 +785,12 @@ enum Symbol {
     Special(SpecialSymbol),
     Flag(FlagDiacriticSymbol),
     String(StringSymbol),
+    #[cfg(feature = "python")]
     External(PyObjectSymbol),
     Raw(RawSymbol),
 }
 
+#[cfg(feature = "python")]
 impl<'py> IntoPyObject<'py> for Symbol {
     type Target = PyAny;
 
@@ -677,6 +822,7 @@ impl Ord for Symbol {
             (Symbol::Special(a), Symbol::Special(b)) => a.cmp(b),
             (Symbol::Flag(a), Symbol::Flag(b)) => a.cmp(b),
             (Symbol::String(a), Symbol::String(b)) => a.cmp(b),
+            #[cfg(feature = "python")]
             (Symbol::External(a), Symbol::External(b)) => a.cmp(b),
             (Symbol::Raw(a), Symbol::Raw(b)) => a.cmp(b),
 
@@ -709,6 +855,7 @@ impl Symbol {
             Symbol::Special(special_symbol) => special_symbol.is_epsilon(),
             Symbol::Flag(flag_diacritic_symbol) => flag_diacritic_symbol.is_epsilon(),
             Symbol::String(string_symbol) => string_symbol.is_epsilon(),
+            #[cfg(feature = "python")]
             Symbol::External(py_object_symbol) => py_object_symbol.is_epsilon(),
             Symbol::Raw(raw_symbol) => raw_symbol.is_epsilon(),
         }
@@ -719,6 +866,7 @@ impl Symbol {
             Symbol::Special(special_symbol) => special_symbol.is_unknown(),
             Symbol::Flag(flag_diacritic_symbol) => flag_diacritic_symbol.is_unknown(),
             Symbol::String(string_symbol) => string_symbol.is_unknown(),
+            #[cfg(feature = "python")]
             Symbol::External(py_object_symbol) => py_object_symbol.is_unknown(),
             Symbol::Raw(raw_symbol) => raw_symbol.is_unknown(),
         }
@@ -729,6 +877,7 @@ impl Symbol {
             Symbol::Special(special_symbol) => special_symbol.get_symbol(),
             Symbol::Flag(flag_diacritic_symbol) => flag_diacritic_symbol.get_symbol(),
             Symbol::String(string_symbol) => string_symbol.get_symbol(),
+            #[cfg(feature = "python")]
             Symbol::External(py_object_symbol) => py_object_symbol.get_symbol(),
             Symbol::Raw(raw_symbol) => raw_symbol.get_symbol(),
         }
@@ -754,6 +903,7 @@ impl Symbol {
     }
 }
 
+#[cfg(feature = "python")]
 impl FromPyObject<'_> for Symbol {
     fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
         ob.extract()
@@ -767,6 +917,7 @@ impl FromPyObject<'_> for Symbol {
 #[derive(Clone, Debug, PartialEq, Hash)]
 pub struct FlagMap(im::HashMap<u32, (bool, u32)>);
 
+#[cfg(feature = "python")]
 impl FromPyObject<'_> for FlagMap {
     fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
         let as_index_map: std::collections::HashMap<String, (bool, String)> = ob.extract()?;
@@ -778,6 +929,7 @@ impl FromPyObject<'_> for FlagMap {
     }
 }
 
+#[cfg(feature = "python")]
 impl<'py> IntoPyObject<'py> for FlagMap {
     type Target = PyDict;
 
@@ -795,18 +947,13 @@ impl<'py> IntoPyObject<'py> for FlagMap {
 
 // transducer.py
 
-#[pyclass(frozen, eq, hash)]
+#[cfg_attr(feature = "python", pyclass(frozen, eq, hash, get_all))]
 #[derive(Clone, Debug, PartialEq)]
 struct FSTState {
-    #[pyo3(get)]
     state_num: u64,
-    #[pyo3(get)]
     path_weight: f64,
-    #[pyo3(get)]
     input_flags: FlagMap,
-    #[pyo3(get)]
     output_flags: FlagMap,
-    #[pyo3(get)]
     output_symbols: Vec<Symbol>,
 }
 
@@ -834,13 +981,8 @@ impl FSTState {
             output_symbols: vec![],
         }
     }
-}
 
-#[pymethods]
-impl FSTState {
-    #[new]
-    #[pyo3(signature = (state, path_weight=0.0, input_flags=IndexMap::new(), output_flags=IndexMap::new(), output_symbols=vec![]))]
-    fn new(
+    fn __new(
         state: u64,
         path_weight: f64,
         input_flags: IndexMap<String, (bool, String)>,
@@ -865,6 +1007,33 @@ impl FSTState {
             output_symbols,
         }
     }
+    
+    #[cfg(not(feature = "python"))]
+    fn new(
+        state: u64,
+        path_weight: f64,
+        input_flags: IndexMap<String, (bool, String)>,
+        output_flags: IndexMap<String, (bool, String)>,
+        output_symbols: Vec<Symbol>,
+    ) -> Self {
+        FSTState::__new(state, path_weight, input_flags, output_flags, output_symbols)
+    }
+}
+
+#[cfg_attr(feature = "python", pymethods)]
+impl FSTState {
+    #[cfg(feature = "python")]
+    #[new]
+    #[pyo3(signature = (state, path_weight=0.0, input_flags=IndexMap::new(), output_flags=IndexMap::new(), output_symbols=vec![]))]
+    fn new(
+        state: u64,
+        path_weight: f64,
+        input_flags: IndexMap<String, (bool, String)>,
+        output_flags: IndexMap<String, (bool, String)>,
+        output_symbols: Vec<Symbol>,
+    ) -> Self {
+        FSTState::__new(state, path_weight, input_flags, output_flags, output_symbols)
+    }
 
     fn __repr__(&self) -> String {
         format!(
@@ -878,15 +1047,11 @@ impl FSTState {
     }
 }
 
-#[pyclass(frozen)]
+#[cfg_attr(feature = "python", pyclass(frozen, get_all))]
 struct FST {
-    #[pyo3(get)]
     final_states: IndexMap<u64, f64>,
-    #[pyo3(get)]
     rules: IndexMap<u64, IndexMap<Symbol, Vec<(u64, Symbol, f64)>>>,
-    #[pyo3(get)]
     symbols: Vec<Symbol>, // Must be sorted in reverse order by length
-    #[pyo3(get)]
     debug: bool,
 }
 
@@ -1330,6 +1495,265 @@ impl FST {
 
         Ok(result)
     }
+    
+    fn _from_rules(
+        final_states: IndexMap<u64, f64>,
+        rules: IndexMap<u64, IndexMap<Symbol, Vec<(u64, Symbol, f64)>>>,
+        symbols: Vec<Symbol>, // Must be sorted in reverse order by length
+        debug: Option<bool>,
+    ) -> FST {
+        let mut new_symbols: Vec<Symbol> = symbols.to_vec();
+        // Sort by normal comparison but in reverse; this guarantees reverse order by length and also
+        // That different-by-symbol-string symbols get treated differently
+        new_symbols.sort();
+        FST {
+            final_states,
+            rules,
+            symbols: new_symbols,
+            debug: debug.unwrap_or(false),
+        }
+    }
+
+    #[cfg(not(feature = "python"))]
+    fn from_rules(
+        final_states: IndexMap<u64, f64>,
+        rules: IndexMap<u64, IndexMap<Symbol, Vec<(u64, Symbol, f64)>>>,
+        symbols: Vec<Symbol>, // Must be sorted in reverse order by length
+        debug: Option<bool>,
+    ) -> FST {
+        FST::_from_rules(final_states, rules, symbols, debug)
+    }
+
+    fn _from_att_file(att_file: String, debug: bool) -> KFSTResult<FST> {
+        // Debug should default to false, pyo3 doesn't make that particularly easy
+        match File::open(Path::new(&att_file)) {
+            Ok(mut file) => {
+                let mut att_code = String::new();
+                file.read_to_string(&mut att_code).map_err(|err| 
+                    io_error::<()>(format!(
+                        "Failed to read from file {}:\n{}",
+                        att_file, err
+                    )).unwrap_err())?;
+                FST::from_att_code(att_code, debug)
+            }
+            Err(err) => io_error(format!(
+                "Failed to open file {}:\n{}",
+                att_file, err
+            )),
+        }
+    }
+
+    #[cfg(not(feature = "python"))]
+    fn from_att_file(att_file: String, debug: bool) -> KFSTResult<FST> {
+        FST::_from_att_file(att_file, debug)
+    }
+
+    fn _from_att_code(att_code: String, debug: bool) -> KFSTResult<FST> {
+        let mut rows: Vec<Result<(u64, f64), (u64, u64, Symbol, Symbol, f64)>> = vec![];
+
+        for (lineno, line) in att_code.lines().enumerate() {
+            let elements: Vec<&str> = line.split("\t").collect();
+            if elements.len() == 1 || elements.len() == 2 {
+                let state = elements[0].parse::<u64>().ok();
+                let weight = if elements.len() == 1 {
+                    Some(0.0)
+                } else {
+                    elements[1].parse::<f64>().ok()
+                };
+                match (state, weight) {
+                    (Some(state), Some(weight)) => {
+                        rows.push(Ok((state, weight)));
+                    }
+                    _ => {
+                        return value_error(format!(
+                            "Failed to parse att code on line {}:\n{}",
+                            lineno, line
+                        ))
+                    }
+                }
+            } else if elements.len() == 4 || elements.len() == 5 {
+                let state_1 = elements[0].parse::<u64>().ok();
+                let state_2 = elements[1].parse::<u64>().ok();
+                let symbol_1 = Symbol::parse(elements[2]).ok();
+                let symbol_2 = Symbol::parse(elements[3]).ok();
+                let weight = if elements.len() == 4 {
+                    Some(0.0)
+                } else {
+                    elements[4].parse::<f64>().ok()
+                };
+                match (state_1, state_2, symbol_1, symbol_2, weight) {
+                    (
+                        Some(state_1),
+                        Some(state_2),
+                        Some(("", symbol_1)),
+                        Some(("", symbol_2)),
+                        Some(weight),
+                    ) => {
+                        rows.push(Err((state_1, state_2, symbol_1, symbol_2, weight)));
+                    }
+                    _ => {
+                        return value_error(format!(
+                            "Failed to parse att code on line {}:\n{}",
+                            lineno, line
+                        ));
+                    }
+                }
+            }
+        }
+        KFSTResult::Ok(FST::from_att_rows(rows, debug))
+    }
+
+    #[cfg(not(feature = "python"))]
+    fn from_att_code(att_code: String, debug: bool) -> KFSTResult<FST> {
+        FST::_from_att_code(att_code, debug)
+    }
+
+    fn _from_kfst_file(kfst_file: String, debug: bool) -> KFSTResult<FST> {
+        match File::open(Path::new(&kfst_file)) {
+            Ok(mut file) => {
+                let mut kfst_bytes: Vec<u8> = vec![];
+                file.read_to_end(&mut kfst_bytes).map_err(|err| {
+                    io_error::<()>(format!(
+                        "Failed to read from file {}:\n{}",
+                        kfst_file, err
+                    )).unwrap_err()
+                })?;
+                FST::from_kfst_bytes(&kfst_bytes, debug)
+            }
+            Err(err) => io_error(format!(
+                "Failed to open file {}:\n{}",
+                kfst_file, err
+            )),
+        }
+    }
+
+    #[cfg(not(feature = "python"))]
+    fn from_kfst_file(kfst_file: String, debug: bool) -> KFSTResult<FST> {
+        FST::_from_kfst_file(kfst_file, debug)
+    }
+
+    #[allow(unused)]
+    fn __from_kfst_bytes(kfst_bytes: &[u8], debug: bool) -> KFSTResult<FST> {
+        match FST::_from_kfst_bytes(kfst_bytes) {
+            Ok(x) => Ok(x),
+            Err(x) => value_error(x),
+        }
+    }
+
+    #[cfg(not(feature = "python"))]
+    fn from_kfst_bytes(kfst_bytes: &[u8], debug: bool) -> KFSTResult<FST> {
+        FST::__from_kfst_bytes(kfst_bytes, debug)
+    }
+
+    fn _split_to_symbols(&self, text: &str, allow_unknown: bool) -> Option<Vec<Symbol>> {
+        let mut result = vec![];
+        let mut pos = text.chars();
+        'outer: while pos.size_hint().0 > 0 {
+            for symbol in self.symbols.iter() {
+                let symbol_string = symbol.get_symbol();
+                if pos.as_str().starts_with(&symbol_string) {
+                    result.push(symbol.clone());
+                    // Consume correct amount of characters from iterator
+                    for _ in symbol_string.chars() {
+                        pos.next();
+                    }
+                    continue 'outer;
+                }
+            }
+            if allow_unknown {
+                result.push(Symbol::String(StringSymbol {
+                    string: intern(pos.next().unwrap().to_string()),
+                    unknown: true,
+                }));
+            } else {
+                return None;
+            }
+        }
+        Some(result)
+    }
+
+    #[cfg(not(feature = "python"))]
+    fn split_to_symbols(&self, text: &str, allow_unknown: bool) -> Option<Vec<Symbol>> {
+        self._split_to_symbols(text, allow_unknown)
+    }
+
+    fn __run_fst(
+        &self,
+        input_symbols: Vec<Symbol>,
+        state: FSTState,
+        post_input_advance: bool,
+    ) -> Vec<(bool, bool, FSTState)> {
+        let mut result = vec![];
+        self._run_fst(
+            input_symbols.as_slice(),
+            &state,
+            post_input_advance,
+            &mut result,
+        );
+        result
+    }
+
+    #[cfg(not(feature = "python"))]
+    fn run_fst(
+        &self,
+        input_symbols: Vec<Symbol>,
+        state: FSTState,
+        post_input_advance: bool,
+    ) -> Vec<(bool, bool, FSTState)> {
+        self.__run_fst(input_symbols, state, post_input_advance)
+    }
+
+    fn _lookup(
+        &self,
+        input: &str,
+        state: FSTState,
+        allow_unknown: bool,
+    ) -> KFSTResult<Vec<(String, f64)>> {
+        let input_symbols = self.split_to_symbols(input, allow_unknown);
+        match input_symbols {
+            None => tokenization_exception(format!(
+                "Input cannot be split into symbols: {}",
+                input
+            )),
+            Some(input_symbols) => {
+                let mut dedup: IndexSet<String> = IndexSet::new();
+                let mut result: Vec<(String, f64)> = vec![];
+                let mut finished_paths: Vec<_> = self
+                    .run_fst(input_symbols.clone(), state, false)
+                    .into_iter()
+                    .filter(|(finished, _, _)| *finished)
+                    .collect();
+                finished_paths
+                    .sort_by(|a, b| a.2.path_weight.partial_cmp(&b.2.path_weight).unwrap());
+                for finished in finished_paths {
+                    let output_string: String = finished
+                        .2
+                        .output_symbols
+                        .iter()
+                        .map(|x| x.get_symbol())
+                        .collect::<Vec<String>>()
+                        .join("");
+                    if dedup.contains(&output_string) {
+                        continue;
+                    }
+                    dedup.insert(output_string.clone());
+                    result.push((output_string, finished.2.path_weight));
+                }
+                Ok(result)
+            }
+        }
+    }
+
+    #[cfg(not(feature = "python"))]
+    fn lookup(
+        &self,
+        input: &str,
+        state: FSTState,
+        allow_unknown: bool,
+    ) -> KFSTResult<Vec<(String, f64)>> {
+        self._lookup(input, state, allow_unknown)
+    }
+
 }
 
 fn _update_flags(
@@ -1423,8 +1847,9 @@ fn _update_flags(
     }
 }
 
-#[pymethods]
+#[cfg_attr(feature = "python", pymethods)]
 impl FST {
+    #[cfg(feature = "python")]
     #[staticmethod]
     #[pyo3(signature = (final_states, rules, symbols, debug = false))]
     fn from_rules(
@@ -1433,99 +1858,26 @@ impl FST {
         symbols: Vec<Symbol>, // Must be sorted in reverse order by length
         debug: Option<bool>,
     ) -> FST {
-        let mut new_symbols: Vec<Symbol> = symbols.to_vec();
-        // Sort by normal comparison but in reverse; this guarantees reverse order by length and also
-        // That different-by-symbol-string symbols get treated differently
-        new_symbols.sort();
-        FST {
-            final_states,
-            rules,
-            symbols: new_symbols,
-            debug: debug.unwrap_or(false),
-        }
+        FST::_from_rules(final_states, rules, symbols, debug)
     }
+
+    #[cfg(feature = "python")]
     #[staticmethod]
     #[pyo3(signature = (att_file, debug = false))]
-    fn from_att_file(att_file: String, debug: bool) -> PyResult<FST> {
-        // Debug should default to false, pyo3 doesn't make that particularly easy
-        match File::open(Path::new(&att_file)) {
-            Ok(mut file) => {
-                let mut att_code = String::new();
-                file.read_to_string(&mut att_code).map_err(|err| {
-                    PyErr::new::<PyIOError, _>(format!(
-                        "Failed to read from file {}:\n{}",
-                        att_file, err
-                    ))
-                })?;
-                FST::from_att_code(att_code, debug)
-            }
-            Err(err) => PyResult::Err(PyErr::new::<PyIOError, _>(format!(
-                "Failed to open file {}:\n{}",
-                att_file, err
-            ))),
-        }
+    fn from_att_file(att_file: String, debug: bool) -> KFSTResult<FST> {
+        FST::_from_att_file(att_file, debug)
     }
 
+    #[cfg(feature = "python")]
     #[staticmethod]
     #[pyo3(signature = (att_code, debug = false))]
-    fn from_att_code(att_code: String, debug: bool) -> PyResult<FST> {
-        let mut rows: Vec<Result<(u64, f64), (u64, u64, Symbol, Symbol, f64)>> = vec![];
-
-        for (lineno, line) in att_code.lines().enumerate() {
-            let elements: Vec<&str> = line.split("\t").collect();
-            if elements.len() == 1 || elements.len() == 2 {
-                let state = elements[0].parse::<u64>().ok();
-                let weight = if elements.len() == 1 {
-                    Some(0.0)
-                } else {
-                    elements[1].parse::<f64>().ok()
-                };
-                match (state, weight) {
-                    (Some(state), Some(weight)) => {
-                        rows.push(Ok((state, weight)));
-                    }
-                    _ => {
-                        return PyResult::Err(PyErr::new::<PyValueError, _>(format!(
-                            "Failed to parse att code on line {}:\n{}",
-                            lineno, line
-                        )));
-                    }
-                }
-            } else if elements.len() == 4 || elements.len() == 5 {
-                let state_1 = elements[0].parse::<u64>().ok();
-                let state_2 = elements[1].parse::<u64>().ok();
-                let symbol_1 = Symbol::parse(elements[2]).ok();
-                let symbol_2 = Symbol::parse(elements[3]).ok();
-                let weight = if elements.len() == 4 {
-                    Some(0.0)
-                } else {
-                    elements[4].parse::<f64>().ok()
-                };
-                match (state_1, state_2, symbol_1, symbol_2, weight) {
-                    (
-                        Some(state_1),
-                        Some(state_2),
-                        Some(("", symbol_1)),
-                        Some(("", symbol_2)),
-                        Some(weight),
-                    ) => {
-                        rows.push(Err((state_1, state_2, symbol_1, symbol_2, weight)));
-                    }
-                    _ => {
-                        return PyResult::Err(PyErr::new::<PyValueError, _>(format!(
-                            "Failed to parse att code on line {}:\n{}",
-                            lineno, line
-                        )));
-                    }
-                }
-            }
-        }
-        PyResult::Ok(FST::from_att_rows(rows, debug))
+    fn from_att_code(att_code: String, debug: bool) -> KFSTResult<FST> {
+        FST::_from_att_code(att_code, debug)
     }
 
-    fn to_att_file(&self, att_file: String) -> PyResult<()> {
+    fn to_att_file(&self, att_file: String) -> KFSTResult<()> {
         fs::write(Path::new(&att_file), self.to_att_code()).map_err(|err| {
-            PyErr::new::<PyIOError, _>(format!("Failed to write to file {}:\n{}", att_file, err))
+            io_error::<()>(format!("Failed to write to file {}:\n{}", att_file, err)).unwrap_err()
         })
     }
 
@@ -1571,48 +1923,31 @@ impl FST {
         rows.join("\n")
     }
 
+    #[cfg(feature = "python")]
     #[staticmethod]
     #[pyo3(signature = (kfst_file, debug = false))]
-    fn from_kfst_file(kfst_file: String, debug: bool) -> PyResult<FST> {
-        match File::open(Path::new(&kfst_file)) {
-            Ok(mut file) => {
-                let mut kfst_bytes: Vec<u8> = vec![];
-                file.read_to_end(&mut kfst_bytes).map_err(|err| {
-                    PyErr::new::<PyIOError, _>(format!(
-                        "Failed to read from file {}:\n{}",
-                        kfst_file, err
-                    ))
-                })?;
-                FST::from_kfst_bytes(&kfst_bytes, debug)
-            }
-            Err(err) => PyResult::Err(PyErr::new::<PyIOError, _>(format!(
-                "Failed to open file {}:\n{}",
-                kfst_file, err
-            ))),
-        }
+    fn from_kfst_file(kfst_file: String, debug: bool) -> KFSTResult<FST> {
+        FST::_from_kfst_file(kfst_file, debug)
     }
 
+    #[cfg(feature = "python")]
     #[staticmethod]
     #[pyo3(signature = (kfst_bytes, debug = false))]
-    #[allow(unused)]
-    fn from_kfst_bytes(kfst_bytes: &[u8], debug: bool) -> PyResult<FST> {
-        match FST::_from_kfst_bytes(kfst_bytes) {
-            Ok(x) => Ok(x),
-            Err(x) => PyResult::Err(PyErr::new::<PyValueError, _>(x)),
-        }
+    fn from_kfst_bytes(kfst_bytes: &[u8], debug: bool) -> KFSTResult<FST> {
+        FST::__from_kfst_bytes(kfst_bytes, debug)
     }
 
-    fn to_kfst_file(&self, kfst_file: String) -> PyResult<()> {
+    fn to_kfst_file(&self, kfst_file: String) -> KFSTResult<()> {
         let bytes = self.to_kfst_bytes()?;
-        fs::write(Path::new(&kfst_file), bytes).map_err(|err| {
-            PyErr::new::<PyIOError, _>(format!("Failed to write to file {}:\n{}", kfst_file, err))
-        })
+        fs::write(Path::new(&kfst_file), bytes).map_err(|err| 
+            io_error::<()>(format!("Failed to write to file {}:\n{}", kfst_file, err)).unwrap_err()
+        )
     }
 
-    fn to_kfst_bytes(&self) -> PyResult<Vec<u8>> {
+    fn to_kfst_bytes(&self) -> KFSTResult<Vec<u8>> {
         match self._to_kfst_bytes() {
             Ok(x) => Ok(x),
-            Err(x) => PyResult::Err(PyErr::new::<PyValueError, _>(x)),
+            Err(x) => value_error(x),
         }
     }
 
@@ -1623,34 +1958,13 @@ impl FST {
         )
     }
 
+    #[cfg(feature = "python")]
     #[pyo3(signature = (text, allow_unknown = true))]
     fn split_to_symbols(&self, text: &str, allow_unknown: bool) -> Option<Vec<Symbol>> {
-        let mut result = vec![];
-        let mut pos = text.chars();
-        'outer: while pos.size_hint().0 > 0 {
-            for symbol in self.symbols.iter() {
-                let symbol_string = symbol.get_symbol();
-                if pos.as_str().starts_with(&symbol_string) {
-                    result.push(symbol.clone());
-                    // Consume correct amount of characters from iterator
-                    for _ in symbol_string.chars() {
-                        pos.next();
-                    }
-                    continue 'outer;
-                }
-            }
-            if allow_unknown {
-                result.push(Symbol::String(StringSymbol {
-                    string: intern(pos.next().unwrap().to_string()),
-                    unknown: true,
-                }));
-            } else {
-                return None;
-            }
-        }
-        Some(result)
+        self._split_to_symbols(text, allow_unknown)
     }
 
+    #[cfg(feature = "python")]
     #[pyo3(signature = (input_symbols, state = FSTState::_new(0), post_input_advance = false))]
     fn run_fst(
         &self,
@@ -1658,56 +1972,18 @@ impl FST {
         state: FSTState,
         post_input_advance: bool,
     ) -> Vec<(bool, bool, FSTState)> {
-        let mut result = vec![];
-        self._run_fst(
-            input_symbols.as_slice(),
-            &state,
-            post_input_advance,
-            &mut result,
-        );
-        result
+        self.__run_fst(input_symbols, state, post_input_advance)
     }
 
+    #[cfg(feature = "python")]
     #[pyo3(signature = (input, state=FSTState::_new(0), allow_unknown=false))]
     fn lookup(
         &self,
         input: &str,
         state: FSTState,
         allow_unknown: bool,
-    ) -> PyResult<Vec<(String, f64)>> {
-        let input_symbols = self.split_to_symbols(input, allow_unknown);
-        match input_symbols {
-            None => PyResult::Err(PyErr::new::<TokenizationException, _>(format!(
-                "Input cannot be split into symbols: {}",
-                input
-            ))),
-            Some(input_symbols) => {
-                let mut dedup: IndexSet<String> = IndexSet::new();
-                let mut result: Vec<(String, f64)> = vec![];
-                let mut finished_paths: Vec<_> = self
-                    .run_fst(input_symbols.clone(), state, false)
-                    .into_iter()
-                    .filter(|(finished, _, _)| *finished)
-                    .collect();
-                finished_paths
-                    .sort_by(|a, b| a.2.path_weight.partial_cmp(&b.2.path_weight).unwrap());
-                for finished in finished_paths {
-                    let output_string: String = finished
-                        .2
-                        .output_symbols
-                        .iter()
-                        .map(|x| x.get_symbol())
-                        .collect::<Vec<String>>()
-                        .join("");
-                    if dedup.contains(&output_string) {
-                        continue;
-                    }
-                    dedup.insert(output_string.clone());
-                    result.push((output_string, finished.2.path_weight));
-                }
-                Ok(result)
-            }
-        }
+    ) -> KFSTResult<Vec<(String, f64)>> {
+        self._lookup(input, state, allow_unknown)
     }
 
     fn get_input_symbols(&self, state: FSTState) -> HashSet<Symbol> {
@@ -2168,6 +2444,7 @@ fn test_raw_symbols() {
 }
 
 /// A Python module implemented in Rust.
+#[cfg(feature = "python")]
 #[pymodule]
 fn kfst_rs(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let symbols = PyModule::new(m.py(), "symbols")?;

@@ -13,4 +13,4 @@ classifiers = [
 dynamic = ["version"]
 [tool.maturin]
 profile = "release"
-features = ["pyo3/extension-module"]
+features = ["pyo3/extension-module", "python"]
