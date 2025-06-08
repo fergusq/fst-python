@@ -14,6 +14,7 @@ indexmap = "2.9.0"
 lzma-rs = "0.3.0"
 nom = "8.0.0"
 pyo3 = { version = "0.24.0", features = ["indexmap", "abi3-py311"], optional = true}
+readonly = "0.2.13"
 
 [features]
 python = ["dep:pyo3"]

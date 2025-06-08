@@ -92,8 +92,15 @@ fn deintern(idx: u32) -> String {
 
 #[cfg_attr(feature = "python", pyclass(str = "RawSymbol({value:?})", eq, ord, frozen, hash, get_all))]
 #[derive(Clone, Copy, Hash, PartialEq, PartialOrd, Ord, Eq, Debug)]
+#[readonly::make]
+/// A Symbol type that has a signaling byte (the first one) and 14 other bytes to dispose of as the caller wishes.
+/// This odd size is such that [Symbol] can be 16 bytes long: a 1-byte discriminant + 15 bytes.
+/// (The [FlagDiacriticSymbol] variant forces [Symbol] to be at least 16 bytes.)
 pub struct RawSymbol {
-    value: [u8; 15] // First byte is reserved: the lsb is is_epsilon and the second lsb is is_unknown
+    /// The first bit of the first byte should be 1 if the symbol is to be seen as epsilon.
+    /// The second bit of the first byte should be 1 if the symbol is to be seen as unknown.
+    /// The remained of the first byte is reserved.
+    pub value: [u8; 15] // First byte is reserved: the lsb is is_epsilon and the second lsb is is_unknown
 }
 
 #[cfg_attr(feature = "python", pymethods)]
@@ -363,9 +370,12 @@ impl PyObjectSymbol {
 
 #[cfg_attr(feature = "python", pyclass(str = "StringSymbol({string:?}, {unknown})", eq, ord, frozen, hash, get_all))]
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
+#[readonly::make]
+/// A symbol that holds an interned string and the information of whether it should be seen as unknown.
 pub struct StringSymbol {
     string: u32,
-    unknown: bool,
+    /// Whether this symbol is considered unknown. 
+    pub unknown: bool,
 }
 
 impl StringSymbol {
@@ -472,8 +482,9 @@ impl FlagDiacriticType {
     hash
 ))]
 #[derive(PartialEq, Eq, Clone, Copy, Hash)]
+#[readonly::make]
 pub struct FlagDiacriticSymbol {
-    flag_type: FlagDiacriticType,
+    pub flag_type: FlagDiacriticType,
     key: u32,
     value: u32,
 }
@@ -567,6 +578,18 @@ impl FlagDiacriticSymbol {
         FlagDiacriticSymbol::_new(flag_type, key, value)
     }
 
+    #[cfg(not(feature = "python"))]
+    /// Deintern the key
+    pub fn key(self) -> String {
+        deintern(self.key)
+    }
+
+    #[cfg(not(feature = "python"))]
+    /// Deintern the value
+    pub fn value(self) -> String {
+        deintern(self.value)
+    }
+
 
 }
 
@@ -605,14 +628,14 @@ impl FlagDiacriticSymbol {
 
     #[cfg(feature = "python")]
     #[getter]
-    fn key(&self) -> u32 {
-        self.key
+    fn key(&self) -> String {
+        deintern(self.key)
     }
 
     #[cfg(feature = "python")]
     #[getter]
-    fn value(&self) -> u32 {
-        self.value
+    fn value(&self) -> String {
+        deintern(self.value)
     }
 
     #[cfg(feature = "python")]
@@ -915,7 +938,8 @@ impl FromPyObject<'_> for Symbol {
     }
 }
 #[derive(Clone, Debug, PartialEq, Hash)]
-pub struct FlagMap(im::HashMap<u32, (bool, u32)>);
+#[readonly::make]
+pub struct FlagMap(pub im::HashMap<u32, (bool, u32)>);
 
 #[cfg(feature = "python")]
 impl FromPyObject<'_> for FlagMap {
@@ -949,12 +973,13 @@ impl<'py> IntoPyObject<'py> for FlagMap {
 
 #[cfg_attr(feature = "python", pyclass(frozen, eq, hash, get_all))]
 #[derive(Clone, Debug, PartialEq)]
+#[readonly::make]
 pub struct FSTState {
-    state_num: u64,
-    path_weight: f64,
-    input_flags: FlagMap,
-    output_flags: FlagMap,
-    output_symbols: Vec<Symbol>,
+    pub state_num: u64,
+    pub path_weight: f64,
+    pub input_flags: FlagMap,
+    pub output_flags: FlagMap,
+    pub output_symbols: Vec<Symbol>,
 }
 
 impl Default for FSTState {
@@ -1054,11 +1079,12 @@ impl FSTState {
 }
 
 #[cfg_attr(feature = "python", pyclass(frozen, get_all))]
+#[readonly::make]
 pub struct FST {
-    final_states: IndexMap<u64, f64>,
-    rules: IndexMap<u64, IndexMap<Symbol, Vec<(u64, Symbol, f64)>>>,
-    symbols: Vec<Symbol>, // Must be sorted in reverse order by length
-    debug: bool,
+    pub final_states: IndexMap<u64, f64>,
+    pub rules: IndexMap<u64, IndexMap<Symbol, Vec<(u64, Symbol, f64)>>>,
+    pub symbols: Vec<Symbol>, // Must be sorted in reverse order by length
+    pub debug: bool,
 }
 
 impl FST {
