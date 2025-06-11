@@ -1,3 +1,53 @@
+//! Fast and portable HFST-compatible finite-state transducers.
+//!
+//! An implementation of finite-state transducers mostly compatible with [HFST](https://hfst.github.io/).
+//! Provides the optional accelerated back-end for [kfst](https://github.com/fergusq/fst-python).
+//! Able to load and execute [Voikko](https://voikko.puimula.org/) and [Omorfi](https://github.com/flammie/omorfi):
+//! see [kfst](https://github.com/fergusq/fst-python) for transducers converted to a compatible format as well as Python bindings.
+//! Supports the ATT format and its own KFST format.
+//!
+//! To convert HFST (optimized lookup or otherwise) to ATT using HFST's tools, do:
+//!
+//! ```bash
+//! hfst-fst2txt transducer.hfst -o transducer.att
+//! ```
+//!
+//! Given the Voikko transducer in KFST or ATT format, one could create a simple analyzer like this:
+//!
+//! ```rust
+//! use kfst_rs::{FSTState, FST};
+//! use std::io::{self, Write};
+//!
+//! // Read in transducer
+//!
+//! # let pathtovoikko = "../pyvoikko/pyvoikko/voikko.kfst".to_string();
+//! let fst = FST::from_kfst_file(pathtovoikko, true).unwrap();
+//! // Alternatively, for ATT use FST::from_att_file
+//!
+//! // Read in word to analyze
+//!
+//! let mut buffer = String::new();
+//! let stdin = io::stdin();
+//! stdin.read_line(&mut buffer).unwrap();
+//! buffer = buffer.trim().to_string();
+//!
+//! // Do analysis proper
+//!
+//! match fst.lookup(&buffer, FSTState::default(), true) {
+//!     Ok(result) => {
+//!         for (i, analysis) in result.into_iter().enumerate() {
+//!             println!("Analysis {}: {} ({})", i+1, analysis.0, analysis.1)
+//!         }
+//!     },
+//!     Err(err) => println!("No analysis: {:?}", err),
+//! }
+//! ```
+//! Given the input "lentokoneessa", this gives the following analysis:
+//!
+//! ```text
+//! Analysis 1: [Lt][Xp]lentää[X]len[Ln][Xj]to[X]to[Sn][Ny][Bh][Bc][Ln][Xp]kone[X]konee[Sine][Ny]ssa (0)
+//! ```
+
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt::{Debug, Error};
@@ -6,7 +56,7 @@ use std::hash::Hash;
 use std::io::Read;
 use std::path::Path;
 
-use indexmap::{IndexMap, IndexSet, indexmap};
+use indexmap::{indexmap, IndexMap, IndexSet};
 use lzma_rs::lzma_compress;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_until1};
@@ -62,7 +112,6 @@ fn tokenization_exception<T>(msg: String) -> KFSTResult<T> {
     KFSTResult::Err(msg)
 }
 
-
 #[cfg(feature = "python")]
 create_exception!(
     kfst_rs,
@@ -89,34 +138,61 @@ fn deintern(idx: u32) -> String {
 }
 
 // symbols.py
+/// Common methods for all symbol types.
+/// Mostly to provides common documentation for implementations.
+pub trait SymbolCommon {
+    /// Is this symbol to be treated as an ε symbol?
+    /// ε symbols get matched without consuming input.
+    /// The simplest ε symbol is the one defined in [SpecialSymbol::EPSILON] and represented interchangeably by `@0@` and `@_EPSILON_SYMBOL_@`.
+    /// All [FlagDiacriticSymbols](FlagDiacriticSymbol) are also ε symbols, as they do not consume input.
+    /// Their string representations are of the form `@X.A@` or `@X.A.B@` where `X` is a [FlagDiacriticType] and `A` and `B` are arbitrary strings.
+    fn is_epsilon(&self) -> bool;
 
-#[cfg_attr(feature = "python", pyclass(str = "RawSymbol({value:?})", eq, ord, frozen, hash, get_all))]
+    /// Is this symbol to be treated as an unknown symbol?
+    /// Unknown symbols are accepted by the [`@_IDENTITY_SYMBOL_@`](SpecialSymbol::IDENTITY) and [`@_UNKNOWN_SYMBOL_@`](SpecialSymbol::UNKNOWN) special symbols.
+    fn is_unknown(&self) -> bool;
+
+    /// Get the string-representation of this symbol.
+    fn get_symbol(&self) -> String;
+}
+
+#[cfg_attr(
+    feature = "python",
+    pyclass(str = "RawSymbol({value:?})", eq, ord, frozen, hash, get_all)
+)]
 #[derive(Clone, Copy, Hash, PartialEq, PartialOrd, Ord, Eq, Debug)]
 #[readonly::make]
 /// A Symbol type that has a signaling byte (the first one) and 14 other bytes to dispose of as the caller wishes.
 /// This odd size is such that [Symbol] can be 16 bytes long: a 1-byte discriminant + 15 bytes.
-/// (The [FlagDiacriticSymbol] variant forces [Symbol] to be at least 16 bytes.)
+/// (The [Symbol::Flag] variant forces [Symbol] to be at least 16 bytes.)
 pub struct RawSymbol {
-    /// The first bit of the first byte should be 1 if the symbol is to be seen as epsilon.
-    /// The second bit of the first byte should be 1 if the symbol is to be seen as unknown.
-    /// The remained of the first byte is reserved.
-    pub value: [u8; 15] // First byte is reserved: the lsb is is_epsilon and the second lsb is is_unknown
+    /// The first bit of the first byte should be 1 if the symbol is to be seen as epsilon (see [is_epsilon](RawSymbol::is_epsilon)).
+    ///
+    /// The second bit of the first byte should be 1 if the symbol is to be seen as unknown (see [is_unknown](RawSymbol::is_unknown)).
+    ///
+    /// The remainder of the first byte is reserved.
+    ///
+    /// The following bytes are caller-defined.
+    pub value: [u8; 15],
 }
 
 #[cfg_attr(feature = "python", pymethods)]
-impl RawSymbol {
-    pub fn is_epsilon(&self) -> bool {
+impl SymbolCommon for RawSymbol {
+    fn is_epsilon(&self) -> bool {
         (self.value[0] & 1) != 0
     }
 
-    pub fn is_unknown(&self) -> bool {
+    fn is_unknown(&self) -> bool {
         (self.value[0] & 2) != 0
     }
 
     fn get_symbol(&self) -> String {
         format!("RawSymbol({:?})", self.value)
     }
+}
 
+#[cfg_attr(feature = "python", pymethods)]
+impl RawSymbol {
     #[cfg(feature = "python")]
     #[new]
     fn new(value: [u8; 15]) -> Self {
@@ -128,7 +204,7 @@ impl RawSymbol {
         RawSymbol { value }
     }
 
-    fn __repr__(&self) -> String {
+    pub fn __repr__(&self) -> String {
         format!("RawSymbol({:?})", self.value)
     }
 }
@@ -368,17 +444,29 @@ impl PyObjectSymbol {
     }
 }
 
-#[cfg_attr(feature = "python", pyclass(str = "StringSymbol({string:?}, {unknown})", eq, ord, frozen, hash, get_all))]
+#[cfg_attr(
+    feature = "python",
+    pyclass(
+        str = "StringSymbol({string:?}, {unknown})",
+        eq,
+        ord,
+        frozen,
+        hash,
+        get_all
+    )
+)]
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 #[readonly::make]
-/// A symbol that holds an interned string and the information of whether it should be seen as unknown.
+/// A symbol that holds an interned string and the information of whether it should be seen as unknown (see [is_unknown](StringSymbol::is_unknown)).
+/// The a copy of the interned string is **held until the end of the program**.
 pub struct StringSymbol {
     string: u32,
-    /// Whether this symbol is considered unknown. 
+    /// Whether this symbol is considered unknown.
     pub unknown: bool,
 }
 
 impl StringSymbol {
+    /// Parse a [&str] into a StringSymbol carrying the same text. Returns a known symbol. Infallible.
     pub fn parse(symbol: &str) -> nom::IResult<&str, StringSymbol> {
         Ok((
             "",
@@ -407,19 +495,22 @@ impl Ord for StringSymbol {
 }
 
 #[cfg_attr(feature = "python", pymethods)]
-impl StringSymbol {
-    pub fn is_epsilon(&self) -> bool {
+impl SymbolCommon for StringSymbol {
+    fn is_epsilon(&self) -> bool {
         false
     }
 
-    pub fn is_unknown(&self) -> bool {
+    fn is_unknown(&self) -> bool {
         self.unknown
     }
 
-    pub fn get_symbol(&self) -> String {
+    fn get_symbol(&self) -> String {
         deintern(self.string)
     }
+}
 
+#[cfg_attr(feature = "python", pymethods)]
+impl StringSymbol {
     #[cfg(feature = "python")]
     #[new]
     fn new(string: String, unknown: bool) -> Self {
@@ -430,6 +521,7 @@ impl StringSymbol {
     }
 
     #[cfg(not(feature = "python"))]
+    /// Creates a new string symbol. Notably, this **interns the string for the program's runtime**.
     pub fn new(string: String, unknown: bool) -> Self {
         StringSymbol {
             string: intern(string),
@@ -444,16 +536,25 @@ impl StringSymbol {
 
 #[cfg_attr(feature = "python", pyclass(eq, ord, frozen))]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Copy, Hash)]
+/// The different types of flag diacritic supported by kfst_rs.
 pub enum FlagDiacriticType {
+    /// Unification diacritic.
     U,
+    /// Requirement diacritic
     R,
+    /// Denial diacritic
     D,
+    /// Clearing diacritic. The transition can always be taken, and the associated flag is cleared.
     C,
+    /// Positive setting diacritic.
     P,
+    /// Negative setting diacritic. The transition can always be taken, and the associated flag is negatively set.
+    /// Eg. `@N.X.Y@` means that `X` is set to a value that is guaranteed to not unify with `Y`.
     N,
 }
 
 impl FlagDiacriticType {
+    /// Converts a string from the set {U, R, D, C, P, N} to the matching diacritic.
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "U" => Some(FlagDiacriticType::U),
@@ -474,13 +575,16 @@ impl FlagDiacriticType {
     }
 }
 
-#[cfg_attr(feature = "python", pyclass(
-    str = "FlagDiacriticSymbol({flag_type:?}, {key:?}, {value:?})",
-    eq,
-    ord,
-    frozen,
-    hash
-))]
+#[cfg_attr(
+    feature = "python",
+    pyclass(
+        str = "FlagDiacriticSymbol({flag_type:?}, {key:?}, {value:?})",
+        eq,
+        ord,
+        frozen,
+        hash
+    )
+)]
 #[derive(PartialEq, Eq, Clone, Copy, Hash)]
 #[readonly::make]
 pub struct FlagDiacriticSymbol {
@@ -562,8 +666,9 @@ impl FlagDiacriticSymbol {
         let flag_type = match FlagDiacriticType::from_str(&flag_type) {
             Some(x) => x,
             None => value_error(format!(
-                    "String {:?} is not a valid FlagDiacriticType specifier",
-                    flag_type))?
+                "String {:?} is not a valid FlagDiacriticType specifier",
+                flag_type
+            ))?,
         };
         Ok(FlagDiacriticSymbol {
             flag_type,
@@ -571,7 +676,6 @@ impl FlagDiacriticSymbol {
             value: value.map(intern).unwrap_or(u32::MAX),
         })
     }
-
 
     #[cfg(not(feature = "python"))]
     pub fn new(flag_type: String, key: String, value: Option<String>) -> KFSTResult<Self> {
@@ -589,21 +693,19 @@ impl FlagDiacriticSymbol {
     pub fn value(self) -> String {
         deintern(self.value)
     }
-
-
 }
 
 #[cfg_attr(feature = "python", pymethods)]
-impl FlagDiacriticSymbol {
-    pub fn is_epsilon(&self) -> bool {
+impl SymbolCommon for FlagDiacriticSymbol {
+    fn is_epsilon(&self) -> bool {
         true
     }
 
-    pub fn is_unknown(&self) -> bool {
+    fn is_unknown(&self) -> bool {
         false
     }
 
-    pub fn get_symbol(&self) -> String {
+    fn get_symbol(&self) -> String {
         match self.value {
             u32::MAX => format!("@{:?}.{}@", self.flag_type, deintern(self.key)),
             value => format!(
@@ -614,7 +716,10 @@ impl FlagDiacriticSymbol {
             ),
         }
     }
+}
 
+#[cfg_attr(feature = "python", pymethods)]
+impl FlagDiacriticSymbol {
     #[cfg(feature = "python")]
     #[getter]
     fn flag_type(&self) -> String {
@@ -622,6 +727,7 @@ impl FlagDiacriticSymbol {
     }
 
     #[cfg(not(feature = "python"))]
+    /// Get the flag_type as a string.
     pub fn flag_type(&self) -> String {
         format!("{:?}", self.flag_type)
     }
@@ -668,6 +774,8 @@ impl FlagDiacriticSymbol {
     }
 
     #[cfg(not(feature = "python"))]
+    /// Check if a string is a [FlagDiacriticSymbol], ie. of the form `@X.Y@` or `@X.Y.Z@` for arbitrary `Y` and `Z` and an `X` that is a [FlagDiacriticType];
+    /// see [FlagDiacriticType::from_str]
     pub fn is_flag_diacritic(symbol: &str) -> bool {
         matches!(FlagDiacriticSymbol::parse(symbol), Ok(("", _)))
     }
@@ -677,7 +785,6 @@ impl FlagDiacriticSymbol {
     fn from_symbol_string(symbol: &str) -> KFSTResult<Self> {
         FlagDiacriticSymbol::_from_symbol_string(symbol)
     }
-
 }
 
 impl std::fmt::Debug for FlagDiacriticSymbol {
@@ -688,7 +795,11 @@ impl std::fmt::Debug for FlagDiacriticSymbol {
 
 #[cfg_attr(feature = "python", pyclass(eq, ord, frozen, hash))]
 #[derive(PartialEq, Eq, Clone, Hash, Copy)]
+/// The three possible HFST special symbols.
 pub enum SpecialSymbol {
+    /// The simplest possible ε-symbol.
+    /// This transition can always be followed and it doesn't modify flag state.
+    /// If placed in ouput position, it is removed from the output string.
     EPSILON,
     IDENTITY,
     UNKNOWN,
@@ -717,10 +828,7 @@ impl SpecialSymbol {
     fn _from_symbol_string(symbol: &str) -> KFSTResult<Self> {
         match SpecialSymbol::parse(symbol) {
             Ok(("", result)) => KFSTResult::Ok(result),
-            _ => value_error(format!(
-                "Not a valid SpecialSymbol: {:?}",
-                symbol
-            )),
+            _ => value_error(format!("Not a valid SpecialSymbol: {:?}", symbol)),
         }
     }
 
@@ -728,7 +836,6 @@ impl SpecialSymbol {
     pub fn from_symbol_string(symbol: &str) -> KFSTResult<Self> {
         SpecialSymbol::_from_symbol_string(symbol)
     }
-
 }
 
 impl PartialOrd for SpecialSymbol {
@@ -745,23 +852,26 @@ impl Ord for SpecialSymbol {
 }
 
 #[cfg_attr(feature = "python", pymethods)]
-impl SpecialSymbol {
-    pub fn is_epsilon(&self) -> bool {
+impl SymbolCommon for SpecialSymbol {
+    fn is_epsilon(&self) -> bool {
         self == &SpecialSymbol::EPSILON
     }
 
-    pub fn is_unknown(&self) -> bool {
+    fn is_unknown(&self) -> bool {
         false
     }
 
-    pub fn get_symbol(&self) -> String {
+    fn get_symbol(&self) -> String {
         match self {
             SpecialSymbol::EPSILON => "@_EPSILON_SYMBOL_@".to_string(),
             SpecialSymbol::IDENTITY => "@_IDENTITY_SYMBOL_@".to_string(),
             SpecialSymbol::UNKNOWN => "@_UNKNOWN_SYMBOL_@".to_string(),
         }
     }
+}
 
+#[cfg_attr(feature = "python", pymethods)]
+impl SpecialSymbol {
     #[cfg(feature = "python")]
     #[staticmethod]
     fn from_symbol_string(symbol: &str) -> KFSTResult<Self> {
@@ -872,8 +982,8 @@ impl Ord for Symbol {
     }
 }
 
-impl Symbol {
-    pub fn is_epsilon(&self) -> bool {
+impl SymbolCommon for Symbol {
+    fn is_epsilon(&self) -> bool {
         match self {
             Symbol::Special(special_symbol) => special_symbol.is_epsilon(),
             Symbol::Flag(flag_diacritic_symbol) => flag_diacritic_symbol.is_epsilon(),
@@ -884,7 +994,7 @@ impl Symbol {
         }
     }
 
-    pub fn is_unknown(&self) -> bool {
+    fn is_unknown(&self) -> bool {
         match self {
             Symbol::Special(special_symbol) => special_symbol.is_unknown(),
             Symbol::Flag(flag_diacritic_symbol) => flag_diacritic_symbol.is_unknown(),
@@ -895,7 +1005,7 @@ impl Symbol {
         }
     }
 
-    pub fn get_symbol(&self) -> String {
+    fn get_symbol(&self) -> String {
         match self {
             Symbol::Special(special_symbol) => special_symbol.get_symbol(),
             Symbol::Flag(flag_diacritic_symbol) => flag_diacritic_symbol.get_symbol(),
@@ -905,7 +1015,9 @@ impl Symbol {
             Symbol::Raw(raw_symbol) => raw_symbol.get_symbol(),
         }
     }
+}
 
+impl Symbol {
     pub fn parse(symbol: &str) -> nom::IResult<&str, Symbol> {
         // nb. never parses a token symbol from a string!
 
@@ -984,7 +1096,13 @@ pub struct FSTState {
 
 impl Default for FSTState {
     fn default() -> Self {
-        Self { state_num: 0, path_weight: 0.0, input_flags: FlagMap(im::HashMap::new()), output_flags: FlagMap(im::HashMap::new()), output_symbols: vec![] }
+        Self {
+            state_num: 0,
+            path_weight: 0.0,
+            input_flags: FlagMap(im::HashMap::new()),
+            output_flags: FlagMap(im::HashMap::new()),
+            output_symbols: vec![],
+        }
     }
 }
 
@@ -1038,7 +1156,7 @@ impl FSTState {
             output_symbols,
         }
     }
-    
+
     #[cfg(not(feature = "python"))]
     pub fn new(
         state: u64,
@@ -1047,7 +1165,13 @@ impl FSTState {
         output_flags: IndexMap<String, (bool, String)>,
         output_symbols: Vec<Symbol>,
     ) -> Self {
-        FSTState::__new(state, path_weight, input_flags, output_flags, output_symbols)
+        FSTState::__new(
+            state,
+            path_weight,
+            input_flags,
+            output_flags,
+            output_symbols,
+        )
     }
 }
 
@@ -1063,7 +1187,13 @@ impl FSTState {
         output_flags: IndexMap<String, (bool, String)>,
         output_symbols: Vec<Symbol>,
     ) -> Self {
-        FSTState::__new(state, path_weight, input_flags, output_flags, output_symbols)
+        FSTState::__new(
+            state,
+            path_weight,
+            input_flags,
+            output_flags,
+            output_symbols,
+        )
     }
 
     pub fn __repr__(&self) -> String {
@@ -1527,7 +1657,7 @@ impl FST {
 
         Ok(result)
     }
-    
+
     fn _from_rules(
         final_states: IndexMap<u64, f64>,
         rules: IndexMap<u64, IndexMap<Symbol, Vec<(u64, Symbol, f64)>>>,
@@ -1561,17 +1691,13 @@ impl FST {
         match File::open(Path::new(&att_file)) {
             Ok(mut file) => {
                 let mut att_code = String::new();
-                file.read_to_string(&mut att_code).map_err(|err| 
-                    io_error::<()>(format!(
-                        "Failed to read from file {}:\n{}",
-                        att_file, err
-                    )).unwrap_err())?;
+                file.read_to_string(&mut att_code).map_err(|err| {
+                    io_error::<()>(format!("Failed to read from file {}:\n{}", att_file, err))
+                        .unwrap_err()
+                })?;
                 FST::from_att_code(att_code, debug)
             }
-            Err(err) => io_error(format!(
-                "Failed to open file {}:\n{}",
-                att_file, err
-            )),
+            Err(err) => io_error(format!("Failed to open file {}:\n{}", att_file, err)),
         }
     }
 
@@ -1645,17 +1771,12 @@ impl FST {
             Ok(mut file) => {
                 let mut kfst_bytes: Vec<u8> = vec![];
                 file.read_to_end(&mut kfst_bytes).map_err(|err| {
-                    io_error::<()>(format!(
-                        "Failed to read from file {}:\n{}",
-                        kfst_file, err
-                    )).unwrap_err()
+                    io_error::<()>(format!("Failed to read from file {}:\n{}", kfst_file, err))
+                        .unwrap_err()
                 })?;
                 FST::from_kfst_bytes(&kfst_bytes, debug)
             }
-            Err(err) => io_error(format!(
-                "Failed to open file {}:\n{}",
-                kfst_file, err
-            )),
+            Err(err) => io_error(format!("Failed to open file {}:\n{}", kfst_file, err)),
         }
     }
 
@@ -1743,10 +1864,9 @@ impl FST {
     ) -> KFSTResult<Vec<(String, f64)>> {
         let input_symbols = self.split_to_symbols(input, allow_unknown);
         match input_symbols {
-            None => tokenization_exception(format!(
-                "Input cannot be split into symbols: {}",
-                input
-            )),
+            None => {
+                tokenization_exception(format!("Input cannot be split into symbols: {}", input))
+            }
             Some(input_symbols) => {
                 let mut dedup: IndexSet<String> = IndexSet::new();
                 let mut result: Vec<(String, f64)> = vec![];
@@ -1785,7 +1905,6 @@ impl FST {
     ) -> KFSTResult<Vec<(String, f64)>> {
         self._lookup(input, state, allow_unknown)
     }
-
 }
 
 fn _update_flags(
@@ -1971,9 +2090,9 @@ impl FST {
 
     pub fn to_kfst_file(&self, kfst_file: String) -> KFSTResult<()> {
         let bytes = self.to_kfst_bytes()?;
-        fs::write(Path::new(&kfst_file), bytes).map_err(|err| 
+        fs::write(Path::new(&kfst_file), bytes).map_err(|err| {
             io_error::<()>(format!("Failed to write to file {}:\n{}", kfst_file, err)).unwrap_err()
-        )
+        })
     }
 
     pub fn to_kfst_bytes(&self) -> KFSTResult<Vec<u8>> {
@@ -2019,7 +2138,10 @@ impl FST {
     }
 
     pub fn get_input_symbols(&self, state: FSTState) -> HashSet<Symbol> {
-        self.rules[&state.state_num].keys().map(|x| x.clone()).collect()
+        self.rules[&state.state_num]
+            .keys()
+            .cloned()
+            .collect()
     }
 }
 
@@ -2446,33 +2568,80 @@ fn test_simple_identity() {
 
 #[test]
 fn test_raw_symbols() {
-
     // Construct simple transducer
 
     let mut rules: IndexMap<u64, IndexMap<Symbol, Vec<(u64, Symbol, f64)>>> = IndexMap::new();
-    let sym_a = Symbol::Raw(RawSymbol { value: [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] });
-    let sym_b = Symbol::Raw(RawSymbol { value: [0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] });
-    let sym_c = Symbol::Raw(RawSymbol { value: [0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] });
-    let special_epsilon = Symbol::Raw(RawSymbol { value: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] });
-    let sym_d = Symbol::Raw(RawSymbol { value: [0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] });
-    let sym_d_unk = Symbol::Raw(RawSymbol { value: [2, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] });
+    let sym_a = Symbol::Raw(RawSymbol {
+        value: [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    });
+    let sym_b = Symbol::Raw(RawSymbol {
+        value: [0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    });
+    let sym_c = Symbol::Raw(RawSymbol {
+        value: [0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    });
+    let special_epsilon = Symbol::Raw(RawSymbol {
+        value: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    });
+    let sym_d = Symbol::Raw(RawSymbol {
+        value: [0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    });
+    let sym_d_unk = Symbol::Raw(RawSymbol {
+        value: [2, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    });
     rules.insert(0, indexmap!(sym_a.clone() => vec![(1, sym_a.clone(), 0.0)]));
     rules.insert(1, indexmap!(sym_b.clone() => vec![(0, sym_b.clone(), 0.0)], Symbol::Special(SpecialSymbol::IDENTITY) => vec![(2, Symbol::Special(SpecialSymbol::IDENTITY), 0.0)]));
-    rules.insert(2, indexmap!(special_epsilon.clone() => vec![(3, sym_c.clone(), 0.0)]));
+    rules.insert(
+        2,
+        indexmap!(special_epsilon.clone() => vec![(3, sym_c.clone(), 0.0)]),
+    );
     let symbols = vec![sym_a.clone(), sym_b.clone(), sym_c.clone(), special_epsilon];
-    let fst = FST { final_states: indexmap! {3 => 0.0} , rules, symbols, debug: false };
+    let fst = FST {
+        final_states: indexmap! {3 => 0.0},
+        rules,
+        symbols,
+        debug: false,
+    };
 
     // Accepting example that tests epsilon + unknown bits
 
-    let result = fst.run_fst(vec![sym_a.clone(), sym_b.clone(), sym_a.clone(), sym_d_unk.clone()], FSTState::_new(0), false);
+    let result = fst.run_fst(
+        vec![
+            sym_a.clone(),
+            sym_b.clone(),
+            sym_a.clone(),
+            sym_d_unk.clone(),
+        ],
+        FSTState::_new(0),
+        false,
+    );
     let filtered: Vec<_> = result.into_iter().filter(|x| x.0).collect();
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].2.state_num, 3);
-    assert_eq!(filtered[0].2.output_symbols, vec![sym_a.clone(), sym_b.clone(), sym_a.clone(), sym_d_unk.clone(), sym_c.clone()]);
+    assert_eq!(
+        filtered[0].2.output_symbols,
+        vec![
+            sym_a.clone(),
+            sym_b.clone(),
+            sym_a.clone(),
+            sym_d_unk.clone(),
+            sym_c.clone()
+        ]
+    );
 
     // Rejecting example that further tests the unknown bit
 
-    assert_eq!(fst.run_fst(vec![sym_a.clone(), sym_b.clone(), sym_a.clone(), sym_d.clone()], FSTState::_new(0), false).into_iter().filter(|x| x.0).count(), 0);
+    assert_eq!(
+        fst.run_fst(
+            vec![sym_a.clone(), sym_b.clone(), sym_a.clone(), sym_d.clone()],
+            FSTState::_new(0),
+            false
+        )
+        .into_iter()
+        .filter(|x| x.0)
+        .count(),
+        0
+    );
 }
 
 /// A Python module implemented in Rust.
