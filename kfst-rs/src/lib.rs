@@ -1316,9 +1316,11 @@ impl FST {
                         (Some(isymbol), Symbol::Special(SpecialSymbol::IDENTITY)) => {
                             new_output_symbols.push(isymbol.clone())
                         }
-                        (_, Symbol::Special(SpecialSymbol::EPSILON)) => (),
-                        (_, Symbol::Flag(_)) => (),
-                        _ => new_output_symbols.push(osymbol.clone()),
+                        _ => {
+                            if !osymbol.is_epsilon() {
+                                new_output_symbols.push(osymbol.clone())
+                            }
+                        }
                     };
                     let new_state = FSTState {
                         state_num: *next_state,
@@ -2138,10 +2140,7 @@ impl FST {
     }
 
     pub fn get_input_symbols(&self, state: FSTState) -> HashSet<Symbol> {
-        self.rules[&state.state_num]
-            .keys()
-            .cloned()
-            .collect()
+        self.rules[&state.state_num].keys().cloned().collect()
     }
 }
 
