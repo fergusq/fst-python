@@ -146,6 +146,7 @@ pub trait SymbolCommon {
     /// The simplest ε symbol is the one defined in [SpecialSymbol::EPSILON] and represented interchangeably by `@0@` and `@_EPSILON_SYMBOL_@`.
     /// All [FlagDiacriticSymbols](FlagDiacriticSymbol) are also ε symbols, as they do not consume input.
     /// Their string representations are of the form `@X.A@` or `@X.A.B@` where `X` is a [FlagDiacriticType] and `A` and `B` are arbitrary strings.
+    /// [FST::run_fst] (and thus [FST::lookup]) drops any symbols on the output side for which this methods returns `true`.
     fn is_epsilon(&self) -> bool;
 
     /// Is this symbol to be treated as an unknown symbol?
