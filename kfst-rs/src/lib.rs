@@ -1940,8 +1940,8 @@ impl FST {
     /// use kfst_rs::FST;
     ///
     /// // With weights
-    ///
-    /// FST::from_att_code(r#"0	1	c	c	1.000000
+    /// 
+    /// let weighted = r#"0	1	c	c	1.000000
     /// 0	2	d	d	2.000000
     /// 1	3	a	a	0.000000
     /// 2	4	o	o	0.000000
@@ -1949,7 +1949,19 @@ impl FST {
     /// 4	5	g	g	0.000000
     /// 5	6	s	s	10.000000
     /// 5	0.000000
-    /// 6	0.000000"#.to_string(), false);
+    /// 6	0.000000"#;
+    /// 
+    /// // to_att_code doesn't guarantee that the ATT file is laid out in the same order
+    ///
+    /// assert_eq!(FST::from_att_code(weighted.to_string(), false).unwrap().to_att_code(), r#"5
+    /// 6
+    /// 0	1	c	c	1
+    /// 0	2	d	d	2
+    /// 1	3	a	a
+    /// 2	4	o	o
+    /// 3	5	t	t
+    /// 4	5	g	g
+    /// 5	6	s	s	10"#);
     ///
     ///
     /// // Unweighted
