@@ -137,25 +137,6 @@ fn deintern(idx: u32) -> String {
         .clone()
 }
 
-// symbols.py
-/// Common methods for all symbol types.
-/// Mostly to provides common documentation for implementations.
-pub trait SymbolCommon {
-    /// Is this symbol to be treated as an ε symbol?
-    /// ε symbols get matched without consuming input.
-    /// The simplest ε symbol is the one defined in [SpecialSymbol::EPSILON] and represented interchangeably by `@0@` and `@_EPSILON_SYMBOL_@`.
-    /// All [FlagDiacriticSymbols](FlagDiacriticSymbol) are also ε symbols, as they do not consume input.
-    /// Their string representations are of the form `@X.A@` or `@X.A.B@` where `X` is a [FlagDiacriticType] and `A` and `B` are arbitrary strings.
-    /// [FST::run_fst] (and thus [FST::lookup]) drops any symbols on the output side for which this methods returns `true`.
-    fn is_epsilon(&self) -> bool;
-
-    /// Is this symbol to be treated as an unknown symbol?
-    /// Unknown symbols are accepted by the [`@_IDENTITY_SYMBOL_@`](SpecialSymbol::IDENTITY) and [`@_UNKNOWN_SYMBOL_@`](SpecialSymbol::UNKNOWN) special symbols.
-    fn is_unknown(&self) -> bool;
-
-    /// Get the string-representation of this symbol.
-    fn get_symbol(&self) -> String;
-}
 
 #[cfg_attr(
     feature = "python",
@@ -178,28 +159,31 @@ pub struct RawSymbol {
 }
 
 #[cfg_attr(feature = "python", pymethods)]
-impl SymbolCommon for RawSymbol {
-    fn is_epsilon(&self) -> bool {
+impl RawSymbol {
+    /// Whether this symbol should be seen as ε. (See [Symbol::is_epsilon] for more general information on this)
+    /// Returns true is the least-significant bit of the first byte of [RawSymbol::value] is set. Returns false otherwise.
+    pub fn is_epsilon(&self) -> bool {
         (self.value[0] & 1) != 0
     }
 
-    fn is_unknown(&self) -> bool {
+    /// Whether this symbol should be seen as unknown. (See [Symbol::is_unknown] for more general information on this)
+    /// Returns true is the second least-significant bit of the first byte of [RawSymbol::value] is set. Returns false otherwise.
+    pub fn is_unknown(&self) -> bool {
         (self.value[0] & 2) != 0
     }
 
-    fn get_symbol(&self) -> String {
+    /// A textual representation of this symbol. (See [Symbol::get_symbol] for more general information on this)
+    pub fn get_symbol(&self) -> String {
         format!("RawSymbol({:?})", self.value)
     }
-}
 
-#[cfg_attr(feature = "python", pymethods)]
-impl RawSymbol {
     #[cfg(feature = "python")]
     #[new]
     fn new(value: [u8; 15]) -> Self {
         RawSymbol { value }
     }
 
+    /// Construct an instance of RawSymbol; simply sets [RawSymbol::value] to the provided value.
     #[cfg(not(feature = "python"))]
     pub fn new(value: [u8; 15]) -> Self {
         RawSymbol { value }
@@ -477,6 +461,13 @@ impl StringSymbol {
     /// StringSymbol::parse("kissa").unwrap(); // Parses into a symbol
     /// assert!(StringSymbol::parse("").is_err()); // Fails because of empty string
     /// ```
+    /// 
+    /// This is a [nom]-style parser that returns the unparsed part of the string alongside the parsed [StringSymbol].
+    /// However, it gobbles up the whole input string and is guaranteed to return something of the form (assuming that it returns Ok at all)
+    /// 
+    /// ```no_test
+    /// Ok(("", StringSymbol { ... }))
+    /// ```
     pub fn parse(symbol: &str) -> nom::IResult<&str, StringSymbol> {
         if symbol.is_empty() {
             return nom::IResult::Err(nom::Err::Error(nom::error::Error::new(
@@ -509,24 +500,26 @@ impl Ord for StringSymbol {
         }
     }
 }
-
 #[cfg_attr(feature = "python", pymethods)]
-impl SymbolCommon for StringSymbol {
-    fn is_epsilon(&self) -> bool {
+impl StringSymbol {
+
+    /// Is this an ε symbol? (See [Symbol::is_epsilon] for more details on the general case)
+    /// Always returns false.
+    pub fn is_epsilon(&self) -> bool {
         false
     }
 
-    fn is_unknown(&self) -> bool {
+    /// Is this an unknown symbol? (See [Symbol::is_unknown] for more details on the general case)
+    /// Returns the value of [StringSymbol::unknown].
+    pub fn is_unknown(&self) -> bool {
         self.unknown
     }
 
-    fn get_symbol(&self) -> String {
+    /// String representation of this symbol (returns the string from which the symbol was constructed)
+    pub fn get_symbol(&self) -> String {
         deintern(self.string)
     }
-}
-
-#[cfg_attr(feature = "python", pymethods)]
-impl StringSymbol {
+    
     #[cfg(feature = "python")]
     #[new]
     fn new(string: String, unknown: bool) -> Self {
@@ -608,7 +601,7 @@ impl FlagDiacriticType {
 )]
 #[derive(PartialEq, Eq, Clone, Copy, Hash)]
 #[readonly::make]
-/// A [Symbol](SymbolCommon) representing a flag diacritic.
+/// A [Symbol] representing a flag diacritic.
 /// Flag diacritics allow making state transitions depend on externally kept state, thus often making transducers smaller.
 /// The symbol consist of three parts:
 /// 1. The FlagType; see [FlagDiacriticType] for possible options
@@ -728,20 +721,20 @@ impl FlagDiacriticSymbol {
 }
 
 #[cfg_attr(feature = "python", pymethods)]
-impl SymbolCommon for FlagDiacriticSymbol {
+impl FlagDiacriticSymbol {
     /// Is this symbol to be treated as an ε symbol? Flag diacritics are always ε; this method is guaranteed to return true.
-    /// See [SymbolCommon::is_epsilon] for a more in-depth explanation of what it means to be ε.
-    fn is_epsilon(&self) -> bool {
+    /// See [Symbol::is_epsilon] for a more in-depth explanation of what it means to be ε.
+    pub fn is_epsilon(&self) -> bool {
         true
     }
 
     /// Is this symbol to be treated as an unknown symbol?
-    /// See [SymbolCommon::is_epsilon] for a more in-depth explanation of what it means to be unknown.
-    fn is_unknown(&self) -> bool {
+    /// See [Symbol::is_epsilon] for a more in-depth explanation of what it means to be unknown.
+    pub fn is_unknown(&self) -> bool {
         false
     }
 
-    fn get_symbol(&self) -> String {
+    pub fn get_symbol(&self) -> String {
         match self.value {
             u32::MAX => format!("@{:?}.{}@", self.flag_type, deintern(self.key)),
             value => format!(
@@ -752,10 +745,7 @@ impl SymbolCommon for FlagDiacriticSymbol {
             ),
         }
     }
-}
 
-#[cfg_attr(feature = "python", pymethods)]
-impl FlagDiacriticSymbol {
     #[cfg(feature = "python")]
     #[getter]
     fn flag_type(&self) -> String {
@@ -840,15 +830,23 @@ pub enum SpecialSymbol {
     /// If placed in ouput position, it is removed from the output string.
     EPSILON,
     /// The identity special symbol.
-    /// It should only appear in transition position. It accepts any unknown symbol, ie. it accepts a symbol is [SymbolCommon::is_unknown] returns `true` for it.
+    /// It should only appear in transition position. It accepts any unknown symbol, ie. it accepts a symbol if [Symbol::is_unknown] returns `true` for it.
     /// It transduces an input symbol into the same symbol on the output side. (Hence the name "identity")
     IDENTITY,
     /// The unknown special symbol.
-    /// It should only appear in transition position. It matches any unknown symbol, ie. it accepts a symbol is [SymbolCommon::is_unknown] returns `true` for it.
+    /// It should only appear in transition position. It matches any unknown symbol, ie. it accepts a symbol if [Symbol::is_unknown] returns `true` for it.
     UNKNOWN,
 }
 
 impl SpecialSymbol {
+    /// Parses this symbol from (the beginning of) a string representation.
+    /// Accepts:
+    /// 
+    /// * `@_EPSILON_SYMBOL_@` and `@0@` for ε ([SpecialSymbol::EPSILON])
+    /// * `@_IDENTITY_SYMBOL_@` for identity ([SpecialSymbol::IDENTITY])
+    /// * `@_UNKNOWN_SYMBOL_@` for unknown ([SpecialSymbol::UNKNOWN])
+    /// 
+    /// Returns a result value (Err if the given &str didn't start with any of the given symbols) containing the remainder of the string and the parsed symbol.
     pub fn parse(symbol: &str) -> nom::IResult<&str, SpecialSymbol> {
         let (rest, value) = alt((
             tag("@_EPSILON_SYMBOL_@"),
@@ -907,26 +905,35 @@ impl Ord for SpecialSymbol {
 }
 
 #[cfg_attr(feature = "python", pymethods)]
-impl SymbolCommon for SpecialSymbol {
-    fn is_epsilon(&self) -> bool {
+impl SpecialSymbol {
+    /// Whether this symbol is ε. (See [Symbol::is_epsilon] for the general case)
+    /// 
+    /// Returns true for [SpecialSymbol::EPSILON] and false otherwise.
+    pub fn is_epsilon(&self) -> bool {
         self == &SpecialSymbol::EPSILON
     }
 
-    fn is_unknown(&self) -> bool {
+    /// Whether this symbol is unknown. (See [Symbol::is_unknown] for the general case)
+    /// 
+    /// Always returns false.
+    pub fn is_unknown(&self) -> bool {
         false
     }
 
-    fn get_symbol(&self) -> String {
+    /// Textual representation of this symbol. Note that the `@0@` synonym for `@_EPSILON_SYMBOL_@` is always converted to the long form.
+    /// 
+    /// ```rust
+    /// use kfst_rs::SpecialSymbol;
+    /// assert_eq!(SpecialSymbol::from_symbol_string("@0@").unwrap().get_symbol(), "@_EPSILON_SYMBOL_@".to_string())
+    /// ```
+    pub fn get_symbol(&self) -> String {
         match self {
             SpecialSymbol::EPSILON => "@_EPSILON_SYMBOL_@".to_string(),
             SpecialSymbol::IDENTITY => "@_IDENTITY_SYMBOL_@".to_string(),
             SpecialSymbol::UNKNOWN => "@_UNKNOWN_SYMBOL_@".to_string(),
         }
     }
-}
 
-#[cfg_attr(feature = "python", pymethods)]
-impl SpecialSymbol {
     #[cfg(feature = "python")]
     #[staticmethod]
     fn from_symbol_string(symbol: &str) -> KFSTResult<Self> {
@@ -987,7 +994,7 @@ pub fn from_symbol_string(symbol: &str) -> Option<Symbol> {
     Symbol::parse(symbol).ok().map(|(_, sym)| sym)
 }
 
-/// A wrapper enum for different concrete symbol types. It itself implements [SymbolCommon] and exists to provide a dense tagged avoiding dynamic dispatch.
+/// A wrapper enum for different concrete symbol types. It exists to provide a dense tagged avoiding dynamic dispatch.
 /// It also deals with converting symbols between Rust and Python when using kfst_rs as a Python library. (crate feature "python")
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Symbol {
@@ -1063,8 +1070,15 @@ impl Ord for Symbol {
     }
 }
 
-impl SymbolCommon for Symbol {
-    fn is_epsilon(&self) -> bool {
+
+impl Symbol {
+    /// Is this symbol to be treated as an ε symbol?
+    /// ε symbols get matched without consuming input.
+    /// The simplest ε symbol is the one defined in [SpecialSymbol::EPSILON] and represented interchangeably by `@0@` and `@_EPSILON_SYMBOL_@`.
+    /// All [FlagDiacriticSymbols](FlagDiacriticSymbol) are also ε symbols, as they do not consume input.
+    /// Their string representations are of the form `@X.A@` or `@X.A.B@` where `X` is a [FlagDiacriticType] and `A` and `B` are arbitrary strings.
+    /// [FST::run_fst] (and thus [FST::lookup]) drops any symbols on the output side for which this methods returns `true`.
+    pub fn is_epsilon(&self) -> bool {
         match self {
             Symbol::Special(special_symbol) => special_symbol.is_epsilon(),
             Symbol::Flag(flag_diacritic_symbol) => flag_diacritic_symbol.is_epsilon(),
@@ -1075,7 +1089,9 @@ impl SymbolCommon for Symbol {
         }
     }
 
-    fn is_unknown(&self) -> bool {
+    /// Is this symbol to be treated as an unknown symbol?
+    /// Unknown symbols are accepted by the [`@_IDENTITY_SYMBOL_@`](SpecialSymbol::IDENTITY) and [`@_UNKNOWN_SYMBOL_@`](SpecialSymbol::UNKNOWN) special symbols.
+    pub fn is_unknown(&self) -> bool {
         match self {
             Symbol::Special(special_symbol) => special_symbol.is_unknown(),
             Symbol::Flag(flag_diacritic_symbol) => flag_diacritic_symbol.is_unknown(),
@@ -1086,7 +1102,8 @@ impl SymbolCommon for Symbol {
         }
     }
 
-    fn get_symbol(&self) -> String {
+    /// Get the string-representation of this symbol.
+    pub fn get_symbol(&self) -> String {
         match self {
             Symbol::Special(special_symbol) => special_symbol.get_symbol(),
             Symbol::Flag(flag_diacritic_symbol) => flag_diacritic_symbol.get_symbol(),
@@ -2048,7 +2065,7 @@ impl FST {
 
     /// Tokenize a text into Symbol instances matching this transducers alphabet ([FST::symbols]).
     /// The argument `allow_unknown` matters only if the text can not be cleanly tokenized:
-    /// * If it is set to `true`, untokenizable sequences get represented as [Symbol::String] that are marked as unknown (see eg. [SymbolCommon::is_unknown]).
+    /// * If it is set to `true`, untokenizable sequences get represented as [Symbol::String] that are marked as unknown (see eg. [Symbol::is_unknown]).
     /// * If it is set to `false`, a value of [None] is returned.
     #[cfg(not(feature = "python"))]
     pub fn split_to_symbols(&self, text: &str, allow_unknown: bool) -> Option<Vec<Symbol>> {
