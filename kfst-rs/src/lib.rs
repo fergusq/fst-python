@@ -141,7 +141,6 @@ fn deintern(idx: u32) -> String {
         .clone()
 }
 
-
 #[cfg_attr(
     feature = "python",
     pyclass(str = "RawSymbol({value:?})", eq, ord, frozen, hash, get_all)
@@ -465,10 +464,10 @@ impl StringSymbol {
     /// StringSymbol::parse("kissa").unwrap(); // Parses into a symbol
     /// assert!(StringSymbol::parse("").is_err()); // Fails because of empty string
     /// ```
-    /// 
+    ///
     /// This is a [nom]-style parser that returns the unparsed part of the string alongside the parsed [StringSymbol].
     /// However, it gobbles up the whole input string and is guaranteed to return something of the form (assuming that it returns Ok at all)
-    /// 
+    ///
     /// ```no_test
     /// Ok(("", StringSymbol { ... }))
     /// ```
@@ -506,7 +505,6 @@ impl Ord for StringSymbol {
 }
 #[cfg_attr(feature = "python", pymethods)]
 impl StringSymbol {
-
     /// Is this an ε symbol? (See [Symbol::is_epsilon] for more details on the general case)
     /// Always returns false.
     pub fn is_epsilon(&self) -> bool {
@@ -523,7 +521,7 @@ impl StringSymbol {
     pub fn get_symbol(&self) -> String {
         deintern(self.string)
     }
-    
+
     #[cfg(feature = "python")]
     #[new]
     fn new(string: String, unknown: bool) -> Self {
@@ -845,11 +843,11 @@ pub enum SpecialSymbol {
 impl SpecialSymbol {
     /// Parses this symbol from (the beginning of) a string representation.
     /// Accepts:
-    /// 
+    ///
     /// * `@_EPSILON_SYMBOL_@` and `@0@` for ε ([SpecialSymbol::EPSILON])
     /// * `@_IDENTITY_SYMBOL_@` for identity ([SpecialSymbol::IDENTITY])
     /// * `@_UNKNOWN_SYMBOL_@` for unknown ([SpecialSymbol::UNKNOWN])
-    /// 
+    ///
     /// Returns a result value (Err if the given &str didn't start with any of the given symbols) containing the remainder of the string and the parsed symbol.
     pub fn parse(symbol: &str) -> nom::IResult<&str, SpecialSymbol> {
         let (rest, value) = alt((
@@ -911,21 +909,21 @@ impl Ord for SpecialSymbol {
 #[cfg_attr(feature = "python", pymethods)]
 impl SpecialSymbol {
     /// Whether this symbol is ε. (See [Symbol::is_epsilon] for the general case)
-    /// 
+    ///
     /// Returns true for [SpecialSymbol::EPSILON] and false otherwise.
     pub fn is_epsilon(&self) -> bool {
         self == &SpecialSymbol::EPSILON
     }
 
     /// Whether this symbol is unknown. (See [Symbol::is_unknown] for the general case)
-    /// 
+    ///
     /// Always returns false.
     pub fn is_unknown(&self) -> bool {
         false
     }
 
     /// Textual representation of this symbol. Note that the `@0@` synonym for `@_EPSILON_SYMBOL_@` is always converted to the long form.
-    /// 
+    ///
     /// ```rust
     /// use kfst_rs::SpecialSymbol;
     /// assert_eq!(SpecialSymbol::from_symbol_string("@0@").unwrap().get_symbol(), "@_EPSILON_SYMBOL_@".to_string())
@@ -1074,7 +1072,6 @@ impl Ord for Symbol {
     }
 }
 
-
 impl Symbol {
     /// Is this symbol to be treated as an ε symbol?
     /// ε symbols get matched without consuming input.
@@ -1121,11 +1118,11 @@ impl Symbol {
 
 impl Symbol {
     /// Parses a string into a [Symbol]. This tries the following conversions in order:
-    /// 
+    ///
     /// 1. [FlagDiacriticSymbol] and the [Symbol::Flag] variant.
     /// 2. [SpecialSymbol] and the [Symbol::Special] variant.
     /// 3. [StringSymbol] and the [Symbol::String] variant.
-    /// 
+    ///
     /// Therefore Symbol::Exernal (only built with feature "python") and [Symbol::Raw] variants cannot be constructed with this method.
     ///
     /// ```rust
@@ -1961,7 +1958,7 @@ impl FST {
     /// use kfst_rs::FST;
     ///
     /// // With weights
-    /// 
+    ///
     /// let weighted = r#"0	1	c	c	1.000000
     /// 0	2	d	d	2.000000
     /// 1	3	a	a	0.000000
@@ -1971,7 +1968,7 @@ impl FST {
     /// 5	6	s	s	10.000000
     /// 5	0.000000
     /// 6	0.000000"#;
-    /// 
+    ///
     /// // to_att_code doesn't guarantee that the ATT file is laid out in the same order
     ///
     /// assert_eq!(FST::from_att_code(weighted.to_string(), false).unwrap().to_att_code(), r#"5
@@ -2098,7 +2095,7 @@ impl FST {
     ///   * finality of the state
     ///   * the value of `post_input_advance`
     ///   * the state proper from which an output symbol sequence can be deduced.
-    /// 
+    ///
     /// Unless you use special token types or need to do complex token manipulation, you should probably be using [FST::lookup].
     pub fn run_fst(
         &self,
