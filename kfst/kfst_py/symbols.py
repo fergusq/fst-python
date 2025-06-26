@@ -66,9 +66,13 @@ class RawSymbol(bytes):
     Unlike other Symbol types, this is a subclass of bytes to achieve both immutability and length-validation.
     """
 
+    value: bytes
+
     def __new__(cls, value: bytes):
         if len(value) == 15:
-            return super(RawSymbol, cls).__new__(cls, value)
+            result = super(RawSymbol, cls).__new__(cls, value)
+            result.value = result
+            return result
         else:
             raise ValueError(f"RawSymbol should have a payload of exactly 15 bytes; len({repr(value)}) == {len(value)}")
 
