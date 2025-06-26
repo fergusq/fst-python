@@ -48,19 +48,23 @@
 //! Analysis 1: [Lt][Xp]lentää[X]len[Ln][Xj]to[X]to[Sn][Ny][Bh][Bc][Ln][Xp]kone[X]konee[Sine][Ny]ssa (0)
 //! ```
 
+#[cfg(feature = "python")]
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::fmt::{Debug, Error};
+use std::fmt::Debug;
+#[cfg(feature = "python")]
+use std::fmt::Error;
 use std::fs::{self, File};
 use std::hash::Hash;
 use std::io::Read;
 use std::path::Path;
 
-use indexmap::{indexmap, IndexMap, IndexSet};
+#[cfg(feature = "python")]
+use indexmap::indexmap;
+use indexmap::{IndexMap, IndexSet};
 use lzma_rs::lzma_compress;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_until1};
-use nom::combinator::value;
 use nom::multi::many_m_n;
 use nom::Parser;
 use std::sync::{LazyLock, Mutex};
@@ -2271,8 +2275,8 @@ impl FST {
     #[cfg(feature = "python")]
     #[staticmethod]
     #[pyo3(signature = (att_file, debug = false))]
-    fn from_att_file(att_file: String, debug: bool) -> KFSTResult<FST> {
-        FST::_from_att_file(att_file, debug)
+    fn from_att_file(py: Python<'_>, att_file: PyObject, debug: bool) -> KFSTResult<FST> {
+        FST::_from_att_file(att_file.call_method0(py, "__str__")?.extract(py)?, debug)
     }
 
     #[cfg(feature = "python")]
@@ -2282,7 +2286,16 @@ impl FST {
         FST::_from_att_code(att_code, debug)
     }
 
+    #[cfg(feature = "python")]
+    pub fn to_att_file(&self, py: Python<'_>, att_file: PyObject) -> KFSTResult<()> {
+        let path: String = att_file.call_method0(py, "__str__")?.extract(py)?;
+        fs::write(Path::new(&path), self.to_att_code()).map_err(|err| {
+            io_error::<()>(format!("Failed to write to file {}:\n{}", path, err)).unwrap_err()
+        })
+    }
+
     /// Save the current transducer to a file in the ATT format. See [FST::from_att_code] for more details on the ATT format.
+    #[cfg(not(feature = "python"))]
     pub fn to_att_file(&self, att_file: String) -> KFSTResult<()> {
         fs::write(Path::new(&att_file), self.to_att_code()).map_err(|err| {
             io_error::<()>(format!("Failed to write to file {}:\n{}", att_file, err)).unwrap_err()
@@ -2335,8 +2348,8 @@ impl FST {
     #[cfg(feature = "python")]
     #[staticmethod]
     #[pyo3(signature = (kfst_file, debug = false))]
-    fn from_kfst_file(kfst_file: String, debug: bool) -> KFSTResult<FST> {
-        FST::_from_kfst_file(kfst_file, debug)
+    fn from_kfst_file(py: Python<'_>, kfst_file: PyObject, debug: bool) -> KFSTResult<FST> {
+        FST::_from_kfst_file(kfst_file.call_method0(py, "__str__")?.extract(py)?, debug)
     }
 
     #[cfg(feature = "python")]
@@ -2346,6 +2359,16 @@ impl FST {
         FST::__from_kfst_bytes(kfst_bytes, debug)
     }
 
+    #[cfg(feature = "python")]
+    pub fn to_kfst_file(&self, py: Python<'_>, kfst_file: PyObject) -> KFSTResult<()> {
+        let bytes = self.to_kfst_bytes()?;
+        let path: String = kfst_file.call_method0(py, "__str__")?.extract(py)?;
+        fs::write(Path::new(&path), bytes).map_err(|err| {
+            io_error::<()>(format!("Failed to write to file {}:\n{}", path, err)).unwrap_err()
+        })
+    }
+
+    #[cfg(not(feature = "python"))]
     /// Save the current transducer to a file in the KFST format. See [FST::from_kfst_bytes] for more details on the KFST format.
     pub fn to_kfst_file(&self, kfst_file: String) -> KFSTResult<()> {
         let bytes = self.to_kfst_bytes()?;
@@ -2413,7 +2436,7 @@ impl FST {
 
 #[test]
 fn test_kfst_voikko_kissa() {
-    let fst = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
+    let fst = FST::_from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     assert_eq!(
         fst.lookup("kissa", FSTState::_new(0), false).unwrap(),
         vec![("[Ln][Xp]kissa[X]kiss[Sn][Ny]a".to_string(), 0.0)]
@@ -2441,7 +2464,7 @@ fn test_that_weight_of_end_state_applies_correctly() {
 #[test]
 fn test_kfst_voikko_correct_final_states() {
     let fst: FST =
-        FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
+        FST::_from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     let map: IndexMap<_, _> = [(19, 0.0)].into_iter().collect();
     assert_eq!(fst.final_states, map);
 }
@@ -2449,7 +2472,7 @@ fn test_kfst_voikko_correct_final_states() {
 #[test]
 fn test_kfst_voikko_split() {
     let fst: FST =
-        FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
+        FST::_from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     assert_eq!(
         fst.split_to_symbols("lentokone", false).unwrap(),
         vec![
@@ -2525,7 +2548,7 @@ fn test_kfst_voikko_split() {
 
 #[test]
 fn test_kfst_voikko() {
-    let fst = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
+    let fst = FST::_from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     assert_eq!(
         fst.lookup("lentokone", FSTState::_new(0), false).unwrap(),
         vec![(
@@ -2538,7 +2561,7 @@ fn test_kfst_voikko() {
 
 #[test]
 fn test_kfst_voikko_lentää() {
-    let fst = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
+    let fst = FST::_from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     assert_eq!(
         fst.lookup("lentää", FSTState::_new(0), false).unwrap(),
         vec![
@@ -2553,7 +2576,7 @@ fn test_kfst_voikko_lentää() {
 
 #[test]
 fn test_kfst_voikko_lentää_correct_states() {
-    let fst = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
+    let fst = FST::_from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     let input_symbols = fst.split_to_symbols("lentää", false).unwrap();
 
     // Correct number of states for different subsequence lengths per KFST
@@ -2625,7 +2648,7 @@ fn test_minimal_r_diacritic() {
 
 #[test]
 fn test_kfst_voikko_lentää_result_count() {
-    let fst = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
+    let fst = FST::_from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     let input_symbols = fst.split_to_symbols("lentää", false).unwrap();
 
     // Correct number of states for different subsequence lengths per KFST
@@ -2751,7 +2774,7 @@ fn test_kfst_voikko_paragraph() {
         vec![("[Ln][Xp]sapatti[X]sapat[Sg][Ny]in[Bh][Bc][Ln][Xp]päivä[X]päiv[Sg][Ny]än", 0)],
         vec![("[Lt][Xp]pyhittää[X]pyhittä[Ln]m[Xj]ä[X][Rm]ä[Sab][Ny]ttä", 0), ("[Lt][Xp]pyhittää[X]pyhittä[Tn3][Ny][Sab]mättä", 0)],
     ];
-    let fst = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
+    let fst = FST::_from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     for (idx, (word, gold)) in words.into_iter().zip(gold.into_iter()).enumerate() {
         let sys = fst.lookup(word, FSTState::_new(0), false).unwrap();
         println!("Word at: {}", idx);
