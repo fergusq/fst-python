@@ -59,9 +59,7 @@ use std::hash::Hash;
 use std::io::Read;
 use std::path::Path;
 
-#[cfg(feature = "python")]
-use indexmap::indexmap;
-use indexmap::{IndexMap, IndexSet};
+use indexmap::{indexmap, IndexMap, IndexSet};
 use lzma_rs::lzma_compress;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_until1};
@@ -208,14 +206,17 @@ struct PyObjectSymbol {
 impl Debug for PyObjectSymbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Python::with_gil(|py| {
+            // Seemingly compiling for CPython3.13t (=free-threaded) doesn't for some mysterious reason allow to extract to a &str
+            // So an owned string it must be
+            let s: String = self.value
+            .getattr(py, "__repr__")
+            .unwrap()
+            .call0(py)
+            .unwrap()
+            .extract(py)
+            .unwrap();
             f.write_str(
-                self.value
-                    .getattr(py, "__repr__")
-                    .unwrap()
-                    .call0(py)
-                    .unwrap()
-                    .extract(py)
-                    .unwrap(),
+                &s
             )
         })
     }
