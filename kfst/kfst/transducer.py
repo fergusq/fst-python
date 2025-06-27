@@ -1,4 +1,6 @@
 import argparse
+
+from kfst import TYPE_CHECKING
 from . import FST as FST
 from pathlib import Path
 
@@ -37,4 +39,28 @@ def main():
 if __name__ == "__main__":
     main()
 else:
-    raise ImportError("Import kfst.transducer using from kfst import transducer instead.")
+    import sys
+
+    # Determine which kfst impl we need to copy from
+
+    from . import BACKEND
+
+    if BACKEND == "kfst" or TYPE_CHECKING:
+
+        # Patch in Python implementation
+
+        from kfst_py.transducer import *
+        import kfst_py
+        if hasattr(kfst_py.transducer, "__all__"):
+            __all__ = kfst_py.transducer.__all__ # type: ignore
+        sys.modules['kfst.transducer'] = kfst_py.transducer
+
+    else:
+
+        # Patch in rust implementation
+
+        from kfst_rs.transducer import *
+        import kfst_rs
+        if hasattr(kfst_rs, "__all__"):
+            __all__ = kfst_rs.transducer.__all__
+        sys.modules['kfst.transducer'] = kfst_rs.transducer

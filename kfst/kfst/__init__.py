@@ -23,21 +23,37 @@ kfst has two potential back-ends: kfst_rs (written in rust) and kfst's built-in 
 """
 
 from typing import TYPE_CHECKING
+import sys
 
-try:
-    from kfst_rs import FST as FST # type: ignore
-    from kfst_rs import TokenizationException as TokenizationException # type: ignore
-    from kfst_rs import transducer as transducer # type: ignore
-    from kfst_rs import symbols as symbols # type: ignore
-    from kfst_py import symbols as __Symbol
-    symbols.Symbol = __Symbol
-    BACKEND = "kfst_rs"
-except ImportError:
-    BACKEND = "kfst"
 
-if TYPE_CHECKING or BACKEND == "kfst":
-    from kfst_py.transducer import FST as FST
-    from kfst_py.transducer import TokenizationException as TokenizationException
-    from kfst_py import symbols as symbols
-    from kfst_py import transducer as transducer
+# This is quite horribly hacky.
+# It's trying to make loading functionality from two different places transparent
+# Dumbly, the Symbol class comes from the python implementation anyway (as it is mostly interesting at type checking time anyway)
+# This is further complicated by:
+# * needing to support import kfst; kfst.x.y along with import kfst.x; kfst.x.y and from kfst import x; x.y and from kfst.x import y; y
+# * needing to support calling transducer.py as a module
+# * not only have correct run-time behaviour but also correctly type
+
+
+if not TYPE_CHECKING:
+    try:
+        from kfst_rs import *
+        import kfst_rs
+        if hasattr(kfst_rs, "__all__"):
+            __all__ = kfst_rs.__all__
+        from kfst_py.symbols import Symbol
+        kfst_rs.symbols.Symbol = Symbol
+        sys.modules['kfst.symbols'] = kfst_rs.symbols
+        # nb. transducer patches itself
+        BACKEND = "kfst_rs"
+    except ImportError:
+        BACKEND = "kfst"
+
+if TYPE_CHECKING or BACKEND == "kfst": # the python back-end is actual python code; point type checkers to it
+    from kfst_py import *
+    import kfst_py
+    if hasattr(kfst_py, "__all__"):
+        __all__ = kfst_py.__all__ # type: ignore
+    sys.modules['kfst.symbols'] = kfst_py.symbols # type: ignore
+    # nb. transducer patches itself
     BACKEND = "kfst"
