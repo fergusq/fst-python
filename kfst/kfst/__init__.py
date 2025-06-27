@@ -29,6 +29,8 @@ try:
     from kfst_rs import TokenizationException as TokenizationException # type: ignore
     from kfst_rs import transducer as transducer # type: ignore
     from kfst_rs import symbols as symbols # type: ignore
+    from kfst_py import symbols as __Symbol
+    symbols.Symbol = __Symbol
     BACKEND = "kfst_rs"
 except ImportError:
     BACKEND = "kfst"
