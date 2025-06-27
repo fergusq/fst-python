@@ -3,6 +3,8 @@ requires = ["maturin>=1.8,<2.0"]
 build-backend = "maturin"
 
 [project]
+license = "LGPL-3.0-or-later"
+author = "Théo Salmenkivi-Friberg"
 name = "kfst-rs"
 requires-python = ">=3.11"
 classifiers = [
