@@ -2,7 +2,8 @@
 import hfst
 import kfst_py
 import kfst
-assert kfst.BACKEND == "kfst_rs"
+if not kfst.BACKEND == "kfst_rs":
+    print("Nota bene: running kfst as python!")
 import timeit
 
 paragraph = [

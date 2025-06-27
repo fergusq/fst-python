@@ -44,16 +44,19 @@ if not TYPE_CHECKING:
         from kfst_py.symbols import Symbol
         kfst_rs.symbols.Symbol = Symbol
         sys.modules['kfst.symbols'] = kfst_rs.symbols
-        # nb. transducer patches itself
+        # nb. transducer and symbols patch itself
         BACKEND = "kfst_rs"
     except ImportError:
         BACKEND = "kfst"
 
-if TYPE_CHECKING or BACKEND == "kfst": # the python back-end is actual python code; point type checkers to it
+if not TYPE_CHECKING and BACKEND == "kfst": # the python back-end is actual python code; point type checkers to it
     from kfst_py import *
     import kfst_py
     if hasattr(kfst_py, "__all__"):
         __all__ = kfst_py.__all__ # type: ignore
-    sys.modules['kfst.symbols'] = kfst_py.symbols # type: ignore
-    # nb. transducer patches itself
+    # nb. transducer and symbols patch themselves
     BACKEND = "kfst"
+
+if TYPE_CHECKING:
+    from . import transducer as transducer
+    from . import symbols as symbols

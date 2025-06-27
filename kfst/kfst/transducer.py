@@ -1,7 +1,7 @@
 import argparse
 
-from kfst import TYPE_CHECKING
-from . import FST as FST
+from typing import TYPE_CHECKING
+from . import FST as FST # type: ignore
 from pathlib import Path
 
 def main():
