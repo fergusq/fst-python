@@ -6,15 +6,6 @@ set -e
 rustup target install x86_64-unknown-linux-gnu
 rustup target install aarch64-unknown-linux-gnu
 
-# Windows targets (msvc)
-
-rustup target install x86_64-pc-windows-msvc
-rustup target install aarch64-pc-windows-msvc
-uvx maturin build --release --target x86_64-pc-windows-msvc --zig
-uvx maturin build --release --target aarch64-pc-windows-msvc --zig
-rustup target uninstall x86_64-pc-windows-msvc
-rustup target uninstall aarch64-pc-windows-msvc
-
 # Windows targets (mingw)
 
 rustup target install x86_64-pc-windows-gnu
