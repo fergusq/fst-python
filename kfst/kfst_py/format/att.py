@@ -1,6 +1,6 @@
 # This file is part of KFST.
 #
-# (c) 2023 Iikka Hauhio <iikka.hauhio@helsinki.fi>
+# (c) 2023-2025 Iikka Hauhio <iikka.hauhio@helsinki.fi> and Théo Salmenkivi-Friberg <theo.friberg@helsinki.fi>
 #
 # KFST is free software: you can redistribute it and/or modify it under the
 # terms of the GNU Lesser General Public License as published by the Free
@@ -13,7 +13,7 @@
 # details.
 #
 # You should have received a copy of the GNU Lesser General Public License
-# along with KFST. If not, see <https://www.gnu.org/licenses/>. 
+# along with KFST. If not, see <https://www.gnu.org/licenses/>.
 
 from collections import defaultdict
 
