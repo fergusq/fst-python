@@ -188,7 +188,7 @@ class FST(NamedTuple):
         """
         transitions = self.rules.get(state.state_num, {})
         if not input_symbols:
-            yield state.state_num in self.final_states, post_input_advance, state
+            yield state.state_num in self.final_states, post_input_advance, state._replace(path_weight=state.path_weight + self.final_states[state.state_num])
             isymbol = None
 
         else:
