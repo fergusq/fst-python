@@ -25,7 +25,15 @@ pip install pyomorfi
 pip install pyvoikko
 ```
 
-kfst\_rs is TBD (and is optional: no features should depend on it being installed). The simplest setup assuming a python environment with maturin available as well as a rust toolchain is to `pip install <path/to/this/repo/kfst-rs>` which should build it automatically. The Dockerfile and bash scripts in the kfst-rs directory automate building wheels for most common platforms. Long term those wheels should still be published.
+kfst\_rs is available as package `kfst-rs` on pypi pre-built for a number of platforms. As such, it should be installable with a simple
+
+```
+pip install kfst-rs
+```
+
+kfst-rs is also completely optional: every feature of kfst should work without it (if that isn't the case, that's a bug we want to know of). However, it can be around 4x faster in certain use-cases (generally those where the highest level interfaces are used).
+
+We mostly test on the platforms we personally use, which should be Linux and macOS. If something else is broken, do ping us and we'll see if we can fix it. If your platform does not have a pre-built binary (let us know and we might make that happen too), the simplest setup assuming a python environment with maturin available as well as a rust toolchain is to `pip install <path/to/this/repo/kfst-rs>` which should build it automatically. The Dockerfile and bash scripts in the kfst-rs directory automate building wheels for the platforms we have pre-built wheels for; you should probably not need them if you just want to get it to work on your computer.
 
 ## Usage
 
