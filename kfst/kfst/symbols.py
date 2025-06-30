@@ -17,8 +17,6 @@ if BACKEND == "kfst" or TYPE_CHECKING:
 
 else:
 
-    print("Patching rust")
-
     # Patch in rust implementation
 
     from kfst_rs.symbols import *
