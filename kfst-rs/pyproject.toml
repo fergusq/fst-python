@@ -1,0 +1,22 @@
+[build-system]
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
+
+[project]
+license = "LGPL-3.0-or-later"
+authors = [
+  {name = "Théo Salmenkivi-Friberg", email = "theo.friberg@helsinki.fi"},
+  {name = "Iikka Hauhio", email = "iikka.hauhio@helsinki.fi"},
+]
+license = "LGPL-3.0-or-later"
+name = "kfst-rs"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dynamic = ["version"]
+[tool.maturin]
+profile = "release"
+features = ["pyo3/extension-module", "python"]

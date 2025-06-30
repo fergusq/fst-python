@@ -1,6 +1,6 @@
 # This file is part of KFST.
 #
-# (c) 2023 Iikka Hauhio <iikka.hauhio@helsinki.fi>
+# (c) 2023-2025 Iikka Hauhio <iikka.hauhio@helsinki.fi> and Théo Salmenkivi-Friberg <theo.friberg@helsinki.fi>
 #
 # KFST is free software: you can redistribute it and/or modify it under the
 # terms of the GNU Lesser General Public License as published by the Free
@@ -13,12 +13,12 @@
 # details.
 #
 # You should have received a copy of the GNU Lesser General Public License
-# along with KFST. If not, see <https://www.gnu.org/licenses/>. 
+# along with KFST. If not, see <https://www.gnu.org/licenses/>.
 
 import argparse
 from pathlib import Path
 
-from .transducer import FST
+from . import transducer
 
 
 def main():
@@ -27,7 +27,7 @@ def main():
     parser.add_argument("output", type=Path, help="output KFST transducer path")
     args = parser.parse_args()
 
-    fst = FST.from_att_file(args.input)
+    fst = transducer.FST.from_att_file(args.input)
     fst.to_kfst_file(args.output)
 
 
