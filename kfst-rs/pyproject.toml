@@ -9,6 +9,8 @@ authors = [
   {name = "Iikka Hauhio", email = "iikka.hauhio@helsinki.fi"},
 ]
 name = "kfst-rs"
+description = "The accelerated companion library to kfst"
+keywords = ["finnish", "nlp", "morphology", "rust"]
 requires-python = ">=3.11"
 classifiers = [
     "Programming Language :: Rust",
@@ -16,6 +18,10 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dynamic = ["version"]
+[project.urls]
+"Bug Tracker" = "https://github.com/fergusq/fst-python/issues"
+Homepage = "https://github.com/fergusq/fst-python"
+Repository = "https://github.com/fergusq/fst-python"
 [tool.maturin]
 profile = "release"
 features = ["pyo3/extension-module", "python"]

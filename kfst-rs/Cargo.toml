@@ -1,9 +1,14 @@
 [package]
 name = "kfst-rs"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Théo Salmenkivi-Friberg <theo.friberg@helsinki.fi>", "Iikka Hauhio <iikka.hauhio@helsinki.fi>"]
 license = "LGPL-3.0-or-later"
+description = "Fast and portable HFST-compatible finite-state transducers."
+repository = "https://github.com/fergusq/fst-python"
+readme = "README.md"
+keywords = ["finnish", "nlp", "morphology", "finite-state transducers", "fst"]
+categories = ["text-processing", "algorithms", "data-structures", "parser-implementations", "parsing"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
