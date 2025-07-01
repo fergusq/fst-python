@@ -7,7 +7,7 @@ license = "LGPL-3.0-or-later"
 description = "Fast and portable HFST-compatible finite-state transducers."
 repository = "https://github.com/fergusq/fst-python"
 readme = "README.md"
-keywords = ["finnish", "nlp", "morphology", "finite-state transducers", "fst"]
+keywords = ["finnish", "nlp", "morphology", "transducers", "fst"]
 categories = ["text-processing", "algorithms", "data-structures", "parser-implementations", "parsing"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
