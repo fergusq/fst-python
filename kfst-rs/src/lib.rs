@@ -78,6 +78,7 @@ use std::hash::Hash;
 use std::io::Read;
 use std::path::Path;
 
+use im::HashMap;
 use indexmap::{indexmap, IndexMap, IndexSet};
 use lzma_rs::lzma_compress;
 use nom::branch::alt;
@@ -227,16 +228,15 @@ impl Debug for PyObjectSymbol {
         Python::with_gil(|py| {
             // Seemingly compiling for CPython3.13t (=free-threaded) doesn't for some mysterious reason allow to extract to a &str
             // So an owned string it must be
-            let s: String = self.value
-            .getattr(py, "__repr__")
-            .unwrap()
-            .call0(py)
-            .unwrap()
-            .extract(py)
-            .unwrap();
-            f.write_str(
-                &s
-            )
+            let s: String = self
+                .value
+                .getattr(py, "__repr__")
+                .unwrap()
+                .call0(py)
+                .unwrap()
+                .extract(py)
+                .unwrap();
+            f.write_str(&s)
         })
     }
 }
