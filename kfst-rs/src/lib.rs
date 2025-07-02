@@ -1867,10 +1867,10 @@ impl FST {
     fn _from_rules(
         final_states: IndexMap<u64, f64>,
         rules: IndexMap<u64, IndexMap<Symbol, Vec<(u64, Symbol, f64)>>>,
-        symbols: Vec<Symbol>, // Must be sorted in reverse order by length
+        symbols: HashSet<Symbol>,
         debug: Option<bool>,
     ) -> FST {
-        let mut new_symbols: Vec<Symbol> = symbols.to_vec();
+        let mut new_symbols: Vec<Symbol> = symbols.into_iter().collect();
         // Sort by normal comparison but in reverse; this guarantees reverse order by length and also
         // That different-by-symbol-string symbols get treated differently
         new_symbols.sort();
@@ -1887,7 +1887,7 @@ impl FST {
     pub fn from_rules(
         final_states: IndexMap<u64, f64>,
         rules: IndexMap<u64, IndexMap<Symbol, Vec<(u64, Symbol, f64)>>>,
-        symbols: Vec<Symbol>, // Must be sorted in reverse order by length
+        symbols: HashSet<Symbol>,
         debug: Option<bool>,
     ) -> FST {
         FST::_from_rules(final_states, rules, symbols, debug)
@@ -2283,7 +2283,7 @@ impl FST {
     fn from_rules(
         final_states: IndexMap<u64, f64>,
         rules: IndexMap<u64, IndexMap<Symbol, Vec<(u64, Symbol, f64)>>>,
-        symbols: Vec<Symbol>, // Must be sorted in reverse order by length
+        symbols: HashSet<Symbol>,
         debug: Option<bool>,
     ) -> FST {
         FST::_from_rules(final_states, rules, symbols, debug)
