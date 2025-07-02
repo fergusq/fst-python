@@ -1,3 +1,10 @@
+# Top level
+
+import kfst
+kfst.TokenizationException
+kfst.FST
+from kfst import TokenizationException, FST
+
 #  ---- Transducer ----
 
 # Syntax 1

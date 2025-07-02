@@ -46,6 +46,9 @@ if not TYPE_CHECKING:
         sys.modules['kfst.symbols'] = kfst_rs.symbols
         # nb. transducer and symbols patch itself
         BACKEND = "kfst_rs"
+        # FST and TokenizationException should be visible from the top level
+        from kfst_rs.transducer import FST as FST
+        from kfst_rs.transducer import TokenizationException as TokenizationException
     except ImportError:
         BACKEND = "kfst"
 
@@ -56,7 +59,13 @@ if not TYPE_CHECKING and BACKEND == "kfst": # the python back-end is actual pyth
         __all__ = kfst_py.__all__ # type: ignore
     # nb. transducer and symbols patch themselves
     BACKEND = "kfst"
+    # FST and TokenizationException should be visible from the top level
+    from kfst_py.transducer import FST as FST
+    from kfst_py.transducer import TokenizationException as TokenizationException
 
 if TYPE_CHECKING:
     from . import transducer as transducer
     from . import symbols as symbols
+    # FST and TokenizationException should be visible from the top level
+    from kfst_py.transducer import FST as FST
+    from kfst_py.transducer import TokenizationException as TokenizationException
