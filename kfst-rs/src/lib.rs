@@ -2446,8 +2446,23 @@ impl FST {
     /// ```
     /// Exists as its own function to make getting the input symbols of a state fast when calling from Python.
     /// (Otherwise the whole [FST::rules] mapping needs to be converted into Python's representation, which is significantly slower)
+    ///
+    /// ```
+    /// use kfst_rs::{FST, Symbol, FSTState};
+    /// use std::collections::HashSet;
+    /// use indexmap::IndexMap;
+    ///
+    /// let fst = FST::from_att_code("0\t1\ta\tb\n".to_string(), false).unwrap();
+    /// let mut expected = HashSet::new();
+    /// expected.insert(Symbol::parse("a").unwrap().1);
+    /// assert_eq!(fst.get_input_symbols(FSTState::new(0, 0.0, IndexMap::new(), IndexMap::new(), vec![])), expected);
+    /// assert_eq!(fst.get_input_symbols(FSTState::new(1, 0.0, IndexMap::new(), IndexMap::new(), vec![])), HashSet::new());
+    /// ```
     pub fn get_input_symbols(&self, state: FSTState) -> HashSet<Symbol> {
-        self.rules[&state.state_num].keys().cloned().collect()
+        self.rules
+            .get(&state.state_num)
+            .map(|x| x.keys().cloned().collect())
+            .unwrap_or_else(|| HashSet::new())
     }
 }
 
