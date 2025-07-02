@@ -30,7 +30,7 @@ Given the Voikko transducer in KFST or ATT format, one could create a simple ana
 use kfst_rs::{FSTState, FST};
 use std::io::{self, Write};
 // Read in transducer
-# let pathtovoikko = "../pyvoikko/pyvoikko/voikko.kfst".to_string();
+let pathtovoikko = ...
 let fst = FST::from_kfst_file(pathtovoikko, true).unwrap();
 // Alternatively, for ATT use FST::from_att_file
 // Read in word to analyze
