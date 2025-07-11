@@ -2429,7 +2429,7 @@ impl FST {
     }
 
     #[cfg(feature = "python")]
-    #[pyo3(signature = (input, state=FSTState::_new(0), allow_unknown=false))]
+    #[pyo3(signature = (input, state=FSTState::_new(0), allow_unknown=true))]
     fn lookup(
         &self,
         input: &str,
