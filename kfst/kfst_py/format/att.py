@@ -20,9 +20,23 @@ from collections import defaultdict
 from ..symbols import Symbol, from_symbol_string
 from ..transducer import FST
 
+def unescape_symbol(att_symbol: str) -> str:
+    """
+    Cleans up escapes in att; in practice @_TAB_@ to actual tab character
+    Open question: should newlines be handled somehow?
+    """
+    return att_symbol.replace("@_TAB_@", "\t")
+
+def escape_symbol(symbol: str) -> str:
+    """
+    Escapes symbol for att compatibility; in practice converts tabs to @_TAB_@ sequences.
+    Open question: should newlines be handled somehow?
+    """
+    return symbol.replace("\t", "@_TAB_@") # Single character, always should be replaced
+
 def decode_att(att_code: str) -> FST:
     """
-    Parses a transducer in A&AT format and returns an FST object.
+    Parses a transducer in AT&T format and returns an FST object.
     """
 
     final_states: dict[int, float] = {}
@@ -37,15 +51,15 @@ def decode_att(att_code: str) -> FST:
             final_states[int(fields[0])] = float(fields[1])
 
         elif len(fields) == 4:
-            symbol1 = from_symbol_string(fields[2])
-            symbol2 = from_symbol_string(fields[3])
+            symbol1 = from_symbol_string(unescape_symbol(fields[2]))
+            symbol2 = from_symbol_string(unescape_symbol(fields[3]))
             rules[int(fields[0])][symbol1].append((int(fields[1]), symbol2, 0))
             symbols.add(symbol1)
             symbols.add(symbol2)
 
         elif len(fields) == 5:
-            symbol1 = from_symbol_string(fields[2])
-            symbol2 = from_symbol_string(fields[3])
+            symbol1 = from_symbol_string(unescape_symbol(fields[2]))
+            symbol2 = from_symbol_string(unescape_symbol(fields[3]))
             rules[int(fields[0])][symbol1].append((int(fields[1]), symbol2, float(fields[4])))
             symbols.add(symbol1)
             symbols.add(symbol2)
@@ -71,8 +85,8 @@ def encode_att(fst: FST) -> str:
         for input_symbol, transitions_list in transitions.items():
             for to_state, output_symbol, weight in transitions_list:
                 if weight == 0:
-                    ans.append("\t".join([str(from_state), str(to_state), input_symbol.get_symbol(), output_symbol.get_symbol()]))
+                    ans.append("\t".join([str(from_state), str(to_state), escape_symbol(input_symbol.get_symbol()), escape_symbol(output_symbol.get_symbol())]))
                 else:
-                    ans.append("\t".join([str(from_state), str(to_state), input_symbol.get_symbol(), output_symbol.get_symbol(), str(weight)]))
+                    ans.append("\t".join([str(from_state), str(to_state), escape_symbol(input_symbol.get_symbol()), escape_symbol(output_symbol.get_symbol()), str(weight)]))
     
     return "\n".join(ans)
