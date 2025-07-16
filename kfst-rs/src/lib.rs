@@ -1362,16 +1362,16 @@ impl FSTState {
     }
 }
 
-/// Cleans up escapes in att; in practice @_TAB_@ to actual tab character
+/// Cleans up escapes in att; in practice it converts @_TAB_@ and @_SPACE_@ to actual tab and space characters
 /// Open question: should newlines be handled somehow?
 fn unescape_att_symbol(att_symbol: &str) -> String {
-    att_symbol.replace("@_TAB_@", "\t")
+    att_symbol.replace("@_TAB_@", "\t").replace("@_SPACE_@", " ")
 }
 
-/// Escapes symbol for att compatibility; in practice converts tabs to @_TAB_@ sequences.
+/// Escapes symbol for att compatibility; in practice converts tabs and spaces to @_TAB_@ and @_SPACE_@ sequences.
 /// Open question: should newlines be handled somehow?
 fn escape_att_symbol(symbol: &str) -> String {
-    symbol.replace("\t", "@_TAB_@")
+    symbol.replace("\t", "@_TAB_@").replace(" ", "@_SPACE_@")
 }
 
 #[cfg_attr(feature = "python", pyclass(frozen, get_all))]

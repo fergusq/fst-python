@@ -25,14 +25,14 @@ def unescape_symbol(att_symbol: str) -> str:
     Cleans up escapes in att; in practice @_TAB_@ to actual tab character
     Open question: should newlines be handled somehow?
     """
-    return att_symbol.replace("@_TAB_@", "\t")
+    return att_symbol.replace("@_TAB_@", "\t").replace("@_SPACE_@", " ")
 
 def escape_symbol(symbol: str) -> str:
     """
     Escapes symbol for att compatibility; in practice converts tabs to @_TAB_@ sequences.
     Open question: should newlines be handled somehow?
     """
-    return symbol.replace("\t", "@_TAB_@") # Single character, always should be replaced
+    return symbol.replace("\t", "@_TAB_@").replace(" ", "@_SPACE_@")
 
 def decode_att(att_code: str) -> FST:
     """
