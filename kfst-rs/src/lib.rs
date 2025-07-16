@@ -1362,6 +1362,18 @@ impl FSTState {
     }
 }
 
+/// Cleans up escapes in att; in practice @_TAB_@ to actual tab character
+/// Open question: should newlines be handled somehow?
+fn unescape_att_symbol(att_symbol: &str) -> String {
+    att_symbol.replace("@_TAB_@", "\t")
+}
+
+/// Escapes symbol for att compatibility; in practice converts tabs to @_TAB_@ sequences.
+/// Open question: should newlines be handled somehow?
+fn escape_att_symbol(symbol: &str) -> String {
+    symbol.replace("\t", "@_TAB_@")
+}
+
 #[cfg_attr(feature = "python", pyclass(frozen, get_all))]
 #[readonly::make]
 /// A finite state transducer.
@@ -1941,8 +1953,10 @@ impl FST {
             } else if elements.len() == 4 || elements.len() == 5 {
                 let state_1 = elements[0].parse::<u64>().ok();
                 let state_2 = elements[1].parse::<u64>().ok();
-                let symbol_1 = Symbol::parse(elements[2]).ok();
-                let symbol_2 = Symbol::parse(elements[3]).ok();
+                let unescaped_sym_1 = unescape_att_symbol(elements[2]);
+                let symbol_1 = Symbol::parse(&unescaped_sym_1).ok();
+                let unescaped_sym_2 = unescape_att_symbol(elements[3]);
+                let symbol_2 = Symbol::parse(&unescaped_sym_2).ok();
                 let weight = if elements.len() == 4 {
                     Some(0.0)
                 } else {
@@ -2341,8 +2355,8 @@ impl FST {
                                 "{}\t{}\t{}\t{}",
                                 from_state,
                                 to_state,
-                                top_symbol.get_symbol(),
-                                bottom_symbol.get_symbol()
+                                escape_att_symbol(&top_symbol.get_symbol()),
+                                escape_att_symbol(&bottom_symbol.get_symbol())
                             ));
                         }
                         _ => {
@@ -2350,8 +2364,8 @@ impl FST {
                                 "{}\t{}\t{}\t{}\t{}",
                                 from_state,
                                 to_state,
-                                top_symbol.get_symbol(),
-                                bottom_symbol.get_symbol(),
+                                escape_att_symbol(&top_symbol.get_symbol()),
+                                escape_att_symbol(&bottom_symbol.get_symbol()),
                                 weight
                             ));
                         }
