@@ -29,7 +29,7 @@ def read_tsv(filename, directory=''):
 
 
 def read_list_tsv(filename):
-	return read_tsv(filename, directory='lists')
+	return read_tsv(filename, directory='.')
 
 
 def save_tsv(filename, data, directory=''):
