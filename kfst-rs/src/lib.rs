@@ -80,7 +80,7 @@ use std::path::Path;
 
 use im::HashMap;
 use indexmap::{indexmap, IndexMap, IndexSet};
-use lzma_rs::lzma_compress;
+use xz2::read::{XzEncoder, XzDecoder};
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_until1};
 use nom::multi::many_m_n;
@@ -1670,9 +1670,8 @@ impl FST {
         // From here on, data is lzma-compressed
 
         let mut decomp: Vec<u8> = Vec::new();
-        let mut rest_ = rest;
-        lzma_rs::xz_decompress(&mut rest_, &mut decomp)
-            .map_err(|_| "Failed to lzma-decompress remainder of file")?;
+        let mut decoder = XzDecoder::new(rest);
+        decoder.read_to_end(&mut decomp).map_err(|_| "Failed to xz-decompress remainder of file")?;
 
         // The decompressed data is - unavoidably - owned by the function
         // We promise an error type of &[u8], which we can't provide from here because of lifetimes
@@ -1791,7 +1790,13 @@ impl FST {
 
         // Dump symbols
 
-        for symbol in self.symbols.iter() {
+        let mut sorted_syms: Vec<_> = self.symbols.iter().collect();
+        sorted_syms.sort_by(|a, b| {
+            let sym_a = a.get_symbol();
+            let sym_b = b.get_symbol();
+            (sym_a.chars().count(), sym_a).cmp(&(sym_b.chars().count(), sym_b))
+        });
+        for symbol in sorted_syms.iter() {
             result.extend(symbol.get_symbol().into_bytes());
             result.push(0); // Add null-terminators
         }
@@ -1805,22 +1810,23 @@ impl FST {
         for (source_state, transition_table) in self.rules.iter() {
             for (top_symbol, transition) in transition_table.iter() {
                 for (target_state, bottom_symbol, weight) in transition.iter() {
-                    let source_state: usize = (*source_state).try_into().map_err(|x| {
+                    let source_state: u32 = (*source_state).try_into().map_err(|x| {
                         format!(
                             "Can't represent source state {} as u32: {}",
                             source_state, x
                         )
                     })?;
-                    let target_state: usize = (*target_state).try_into().map_err(|x| {
+                    let target_state: u32 = (*target_state).try_into().map_err(|x| {
                         format!(
                             "Can't represent target state {} as u32: {}",
                             target_state, x
                         )
                     })?;
-                    let top_index: u16 = self
-                        .symbols
-                        .binary_search(top_symbol)
-                        .map_err(|_| {
+                    let top_index: u16 = sorted_syms.binary_search_by(|&probe| {
+            let sym_a = probe.get_symbol();
+            let sym_b = top_symbol.get_symbol();
+            (sym_a.chars().count(), sym_a).cmp(&(sym_b.chars().count(), sym_b))
+        }).map_err(|_| {
                             format!("Top symbol {:?} not found in FST symbol list", top_symbol)
                         })
                         .and_then(|x| {
@@ -1828,10 +1834,11 @@ impl FST {
                                 format!("Can't represent top symbol index as u16: {}", x)
                             })
                         })?;
-                    let bottom_index: u16 = self
-                        .symbols
-                        .binary_search(bottom_symbol)
-                        .map_err(|_| {
+                    let bottom_index: u16 = sorted_syms.binary_search_by(|&probe| {
+            let sym_a = probe.get_symbol();
+            let sym_b = bottom_symbol.get_symbol();
+            (sym_a.chars().count(), sym_a).cmp(&(sym_b.chars().count(), sym_b))
+        }).map_err(|_| {
                             format!("Top symbol {:?} not found in FST symbol list", top_symbol)
                         })
                         .and_then(|x| {
@@ -1869,8 +1876,9 @@ impl FST {
         // Compress compressible buffer
 
         let mut compressed = vec![];
-        lzma_compress(&mut to_compress.as_slice(), &mut compressed)
-            .map_err(|x| format!("Failed while compressing with lzma_rs: {}", x))?;
+
+        let mut encoder = XzEncoder::new(to_compress.as_slice(), 9);
+        encoder.read_to_end(&mut compressed).map_err(|x| format!("Failed while compressing with lzma_rs: {}", x))?;
         result.extend(compressed);
 
         Ok(result)
