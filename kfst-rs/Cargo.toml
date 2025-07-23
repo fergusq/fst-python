@@ -22,6 +22,7 @@ nom = "8.0.0"
 pyo3 = { version = "0.24.0", features = ["indexmap", "abi3-py311", "generate-import-lib"], optional = true}
 readonly = "0.2.13"
 xz2 = "0.1.7"
+lzma-sys = {version = "0.1.20", features = ["static"]}
 
 [features]
 python = ["dep:pyo3"]
