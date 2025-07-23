@@ -2034,9 +2034,28 @@ impl FST {
     /// 4	5	g	g
     /// 5	6	s	s
     /// 5
-    /// 6"#.to_string(), false);
+    /// 6"#.to_string(), false).unwrap();
     /// ```
     /// `debug` is passed along to [FST::debug].
+    /// 
+    /// kfst attempts to maintain compatibility with the hfst interpretation of AT&T. This includes the `@_TAB_@` and `@_SPACE_@` special sequences.
+    /// 
+    /// ```rust
+    /// use kfst_rs::{FST, FSTState};
+    /// 
+    /// // @_TAB_@ and @_SPACE_@ escapes can appear both as top and bottom symbols
+    /// 
+    /// let f = FST::from_att_code(r#"4
+    /// 0	1	@_TAB_@	a
+    /// 1	2	b	@_TAB_@x
+    /// 2	3	@_SPACE_@	c
+    /// 3	4	d	@_SPACE_@
+    /// "#.to_string(), false).unwrap();
+    /// 
+    /// // The read-in transducer then correctly handles tabs and spaces
+    /// 
+    /// assert_eq!(f.lookup("\tb d", FSTState::default(), false).unwrap(), vec![("a\txc ".to_string(), 0.0)]);
+    /// ```
     pub fn from_att_code(att_code: String, debug: bool) -> KFSTResult<FST> {
         FST::_from_att_code(att_code, debug)
     }
@@ -2341,7 +2360,28 @@ impl FST {
         })
     }
 
-    /// Serialize the current transducer to a [String] in the ATT format. See [FST::from_att_code] for more details on the ATT format.
+    /// Serialize the current transducer to a [String] in the AT&T format. See [FST::from_att_code] for more details on the AT&T format.
+    /// kfst tries to adhere to hfst's behaviour as closely as possible. This introduces some corner cases and odd behaviours.
+    /// AT&T format has significant line feeds and tabs. Tabs in the transducer are represented as `@_TAB_@` in AT&T format.
+    /// Spaces are also escaped as `@_SPACE_@`. However, there is no escape for the @-character itself (so the litteral string `"@_TAB_@"` cannot appear in a transition.)
+    /// Line feeds are simply not escaped at all.
+    ///  
+    /// ```rust
+    /// use kfst_rs::FST;
+    /// 
+    /// // @_TAB_@ and @_SPACE_@ escapes can appear both as top and bottom symbols
+    /// 
+    /// let code = r#"4
+    /// 0	1	@_TAB_@	a
+    /// 1	2	b	@_TAB_@x
+    /// 2	3	@_SPACE_@	c
+    /// 3	4	d	@_SPACE_@"#;
+    /// 
+    /// let f = FST::from_att_code(code.to_string(), false).unwrap();
+    /// assert_eq!(f.to_att_code(), code.to_string());
+    /// ```
+    /// 
+    /// 
     pub fn to_att_code(&self) -> String {
         let mut rows: Vec<String> = vec![];
         for (state, weight) in self.final_states.iter() {
