@@ -119,14 +119,14 @@ def encode_kfst(fst: FST) -> bytes:
     buffer += struct.pack("!HII?", len(fst.symbols), num_rules, len(fst.final_states), is_weighted) # header
 
     # Write symbols
-    symbols_list = sorted(fst.symbols, key=lambda s: s.get_symbol())
+    symbols_list = sorted(fst.symbols, key=lambda s: (len(s.get_symbol()), s.get_symbol()))
     for symbol in symbols_list:
         buffer += symbol.get_symbol().encode("utf-8") + b"\x00"
 
     state_bytes = []
     
     # Write states
-    for from_state, transitions in fst.rules.items():
+    for from_state, transitions in sorted(fst.rules.items()):
         for input_symbol, transitions_list in transitions.items():
             for to_state, output_symbol, weight in transitions_list:
                 state_bytes.append(struct.pack("!IIHH", from_state, to_state, symbols_list.index(input_symbol), symbols_list.index(output_symbol)))

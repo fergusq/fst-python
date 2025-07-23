@@ -80,7 +80,7 @@ use std::path::Path;
 
 use im::HashMap;
 use indexmap::{indexmap, IndexMap, IndexSet};
-use lzma_rs::lzma_compress;
+use xz2::read::{XzEncoder, XzDecoder};
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_until1};
 use nom::multi::many_m_n;
@@ -1362,6 +1362,18 @@ impl FSTState {
     }
 }
 
+/// Cleans up escapes in att; in practice it converts @_TAB_@ and @_SPACE_@ to actual tab and space characters
+/// Open question: should newlines be handled somehow?
+fn unescape_att_symbol(att_symbol: &str) -> String {
+    att_symbol.replace("@_TAB_@", "\t").replace("@_SPACE_@", " ")
+}
+
+/// Escapes symbol for att compatibility; in practice converts tabs and spaces to @_TAB_@ and @_SPACE_@ sequences.
+/// Open question: should newlines be handled somehow?
+fn escape_att_symbol(symbol: &str) -> String {
+    symbol.replace("\t", "@_TAB_@").replace(" ", "@_SPACE_@")
+}
+
 #[cfg_attr(feature = "python", pyclass(frozen, get_all))]
 #[readonly::make]
 /// A finite state transducer.
@@ -1658,9 +1670,8 @@ impl FST {
         // From here on, data is lzma-compressed
 
         let mut decomp: Vec<u8> = Vec::new();
-        let mut rest_ = rest;
-        lzma_rs::xz_decompress(&mut rest_, &mut decomp)
-            .map_err(|_| "Failed to lzma-decompress remainder of file")?;
+        let mut decoder = XzDecoder::new(rest);
+        decoder.read_to_end(&mut decomp).map_err(|_| "Failed to xz-decompress remainder of file")?;
 
         // The decompressed data is - unavoidably - owned by the function
         // We promise an error type of &[u8], which we can't provide from here because of lifetimes
@@ -1779,7 +1790,13 @@ impl FST {
 
         // Dump symbols
 
-        for symbol in self.symbols.iter() {
+        let mut sorted_syms: Vec<_> = self.symbols.iter().collect();
+        sorted_syms.sort_by(|a, b| {
+            let sym_a = a.get_symbol();
+            let sym_b = b.get_symbol();
+            (sym_a.chars().count(), sym_a).cmp(&(sym_b.chars().count(), sym_b))
+        });
+        for symbol in sorted_syms.iter() {
             result.extend(symbol.get_symbol().into_bytes());
             result.push(0); // Add null-terminators
         }
@@ -1793,22 +1810,23 @@ impl FST {
         for (source_state, transition_table) in self.rules.iter() {
             for (top_symbol, transition) in transition_table.iter() {
                 for (target_state, bottom_symbol, weight) in transition.iter() {
-                    let source_state: usize = (*source_state).try_into().map_err(|x| {
+                    let source_state: u32 = (*source_state).try_into().map_err(|x| {
                         format!(
                             "Can't represent source state {} as u32: {}",
                             source_state, x
                         )
                     })?;
-                    let target_state: usize = (*target_state).try_into().map_err(|x| {
+                    let target_state: u32 = (*target_state).try_into().map_err(|x| {
                         format!(
                             "Can't represent target state {} as u32: {}",
                             target_state, x
                         )
                     })?;
-                    let top_index: u16 = self
-                        .symbols
-                        .binary_search(top_symbol)
-                        .map_err(|_| {
+                    let top_index: u16 = sorted_syms.binary_search_by(|&probe| {
+            let sym_a = probe.get_symbol();
+            let sym_b = top_symbol.get_symbol();
+            (sym_a.chars().count(), sym_a).cmp(&(sym_b.chars().count(), sym_b))
+        }).map_err(|_| {
                             format!("Top symbol {:?} not found in FST symbol list", top_symbol)
                         })
                         .and_then(|x| {
@@ -1816,10 +1834,11 @@ impl FST {
                                 format!("Can't represent top symbol index as u16: {}", x)
                             })
                         })?;
-                    let bottom_index: u16 = self
-                        .symbols
-                        .binary_search(bottom_symbol)
-                        .map_err(|_| {
+                    let bottom_index: u16 = sorted_syms.binary_search_by(|&probe| {
+            let sym_a = probe.get_symbol();
+            let sym_b = bottom_symbol.get_symbol();
+            (sym_a.chars().count(), sym_a).cmp(&(sym_b.chars().count(), sym_b))
+        }).map_err(|_| {
                             format!("Top symbol {:?} not found in FST symbol list", top_symbol)
                         })
                         .and_then(|x| {
@@ -1857,8 +1876,9 @@ impl FST {
         // Compress compressible buffer
 
         let mut compressed = vec![];
-        lzma_compress(&mut to_compress.as_slice(), &mut compressed)
-            .map_err(|x| format!("Failed while compressing with lzma_rs: {}", x))?;
+
+        let mut encoder = XzEncoder::new(to_compress.as_slice(), 9);
+        encoder.read_to_end(&mut compressed).map_err(|x| format!("Failed while compressing with lzma_rs: {}", x))?;
         result.extend(compressed);
 
         Ok(result)
@@ -1941,8 +1961,10 @@ impl FST {
             } else if elements.len() == 4 || elements.len() == 5 {
                 let state_1 = elements[0].parse::<u64>().ok();
                 let state_2 = elements[1].parse::<u64>().ok();
-                let symbol_1 = Symbol::parse(elements[2]).ok();
-                let symbol_2 = Symbol::parse(elements[3]).ok();
+                let unescaped_sym_1 = unescape_att_symbol(elements[2]);
+                let symbol_1 = Symbol::parse(&unescaped_sym_1).ok();
+                let unescaped_sym_2 = unescape_att_symbol(elements[3]);
+                let symbol_2 = Symbol::parse(&unescaped_sym_2).ok();
                 let weight = if elements.len() == 4 {
                     Some(0.0)
                 } else {
@@ -2012,9 +2034,28 @@ impl FST {
     /// 4	5	g	g
     /// 5	6	s	s
     /// 5
-    /// 6"#.to_string(), false);
+    /// 6"#.to_string(), false).unwrap();
     /// ```
     /// `debug` is passed along to [FST::debug].
+    /// 
+    /// kfst attempts to maintain compatibility with the hfst interpretation of AT&T. This includes the `@_TAB_@` and `@_SPACE_@` special sequences.
+    /// 
+    /// ```rust
+    /// use kfst_rs::{FST, FSTState};
+    /// 
+    /// // @_TAB_@ and @_SPACE_@ escapes can appear both as top and bottom symbols
+    /// 
+    /// let f = FST::from_att_code(r#"4
+    /// 0	1	@_TAB_@	a
+    /// 1	2	b	@_TAB_@x
+    /// 2	3	@_SPACE_@	c
+    /// 3	4	d	@_SPACE_@
+    /// "#.to_string(), false).unwrap();
+    /// 
+    /// // The read-in transducer then correctly handles tabs and spaces
+    /// 
+    /// assert_eq!(f.lookup("\tb d", FSTState::default(), false).unwrap(), vec![("a\txc ".to_string(), 0.0)]);
+    /// ```
     pub fn from_att_code(att_code: String, debug: bool) -> KFSTResult<FST> {
         FST::_from_att_code(att_code, debug)
     }
@@ -2319,7 +2360,28 @@ impl FST {
         })
     }
 
-    /// Serialize the current transducer to a [String] in the ATT format. See [FST::from_att_code] for more details on the ATT format.
+    /// Serialize the current transducer to a [String] in the AT&T format. See [FST::from_att_code] for more details on the AT&T format.
+    /// kfst tries to adhere to hfst's behaviour as closely as possible. This introduces some corner cases and odd behaviours.
+    /// AT&T format has significant line feeds and tabs. Tabs in the transducer are represented as `@_TAB_@` in AT&T format.
+    /// Spaces are also escaped as `@_SPACE_@`. However, there is no escape for the @-character itself (so the litteral string `"@_TAB_@"` cannot appear in a transition.)
+    /// Line feeds are simply not escaped at all.
+    ///  
+    /// ```rust
+    /// use kfst_rs::FST;
+    /// 
+    /// // @_TAB_@ and @_SPACE_@ escapes can appear both as top and bottom symbols
+    /// 
+    /// let code = r#"4
+    /// 0	1	@_TAB_@	a
+    /// 1	2	b	@_TAB_@x
+    /// 2	3	@_SPACE_@	c
+    /// 3	4	d	@_SPACE_@"#;
+    /// 
+    /// let f = FST::from_att_code(code.to_string(), false).unwrap();
+    /// assert_eq!(f.to_att_code(), code.to_string());
+    /// ```
+    /// 
+    /// 
     pub fn to_att_code(&self) -> String {
         let mut rows: Vec<String> = vec![];
         for (state, weight) in self.final_states.iter() {
@@ -2341,8 +2403,8 @@ impl FST {
                                 "{}\t{}\t{}\t{}",
                                 from_state,
                                 to_state,
-                                top_symbol.get_symbol(),
-                                bottom_symbol.get_symbol()
+                                escape_att_symbol(&top_symbol.get_symbol()),
+                                escape_att_symbol(&bottom_symbol.get_symbol())
                             ));
                         }
                         _ => {
@@ -2350,8 +2412,8 @@ impl FST {
                                 "{}\t{}\t{}\t{}\t{}",
                                 from_state,
                                 to_state,
-                                top_symbol.get_symbol(),
-                                bottom_symbol.get_symbol(),
+                                escape_att_symbol(&top_symbol.get_symbol()),
+                                escape_att_symbol(&bottom_symbol.get_symbol()),
                                 weight
                             ));
                         }
