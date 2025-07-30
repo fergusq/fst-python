@@ -1115,7 +1115,7 @@ impl Ord for Symbol {
 
                 // Use with_symbol to avoid a clone in the common cases of special symbols and epsilon symbols
                 let result = self.with_symbol(|self_sym| {
-                    other.with_symbol(|other_sym| (other_sym.len(), &self_sym).cmp(&(self_sym.len(), &other_sym)))
+                    other.with_symbol(|other_sym| (other_sym.chars().count(), &self_sym).cmp(&(self_sym.chars().count(), &other_sym)))
                 });
                 if result != Ordering::Equal {
                     return result;
@@ -2297,25 +2297,51 @@ impl FST {
 
     fn _split_to_symbols(&self, text: &str, allow_unknown: bool) -> Option<Vec<Symbol>> {
         let mut result = vec![];
-        let mut pos = text.chars();
-        'outer: while pos.size_hint().0 > 0 {
-            for symbol in self.symbols.iter() {
-                let symbol_string = symbol.get_symbol();
-                if pos.as_str().starts_with(&symbol_string) {
-                    result.push(symbol.clone());
-                    // Consume correct amount of characters from iterator
-                    for _ in symbol_string.chars() {
-                        pos.next();
+        let max_len = self.symbols.iter().filter(|x| match x {
+            Symbol::String(_) => true,
+            Symbol::Special(_) => true,
+            Symbol::Flag(_) => true,
+            _ => false
+        }).map(|x| x.with_symbol(|s| s.chars().count())).next().unwrap_or(0);
+        let mut slice = text;
+        let mut len_left = slice.len(); // Actually want bytes here!
+        while len_left > 0 {
+            let mut found = false;
+            'outer: for length in (0..std::cmp::min(max_len, len_left)+1).rev() {
+                if !slice.is_char_boundary(length) {
+                    continue
+                }
+                let key = &slice[..length];
+                let pp = self.symbols.partition_point(|x| x.with_symbol(|y| (key.chars().count(), y) < (y.chars().count(), key)));
+                for sym in self.symbols[pp..].iter().filter(|x| match x {
+                    Symbol::String(_) => true,
+                    Symbol::Special(_) => true,
+                    Symbol::Flag(_) => true,
+                    _ => false
+                }) {
+                    if sym.with_symbol(|s| s != key) {
+                        break;
                     }
-                    continue 'outer;
+                    if match sym {
+                        Symbol::String(_) => true,
+                        Symbol::Special(_) => true,
+                        Symbol::Flag(_) => true,
+                        _ => false
+                    } {
+                        result.push(sym.clone());
+                        slice = &slice[length..];
+                        len_left -= length;
+                        found = true;
+                        break 'outer;
+                    }
                 }
             }
-            if allow_unknown {
-                result.push(Symbol::String(StringSymbol {
-                    string: intern(pos.next().unwrap().to_string()),
-                    unknown: true,
-                }));
-            } else {
+            if (!found) && allow_unknown {
+                let char = slice.chars().next().unwrap();
+                slice = &slice[char.len_utf8()..];
+                result.push(Symbol::String(StringSymbol::new(char.to_string(), false)));
+            }
+            if !found {
                 return None;
             }
         }
