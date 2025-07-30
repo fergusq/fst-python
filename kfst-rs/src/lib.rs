@@ -67,7 +67,6 @@
 //! Analysis 1: [Lt][Xp]lentää[X]len[Ln][Xj]to[X]to[Sn][Ny][Bh][Bc][Ln][Xp]kone[X]konee[Sine][Ny]ssa (0)
 //! ```
 
-#[cfg(feature = "python")]
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -80,12 +79,12 @@ use std::path::Path;
 
 use im::HashMap;
 use indexmap::{indexmap, IndexMap, IndexSet};
-use xz2::read::{XzEncoder, XzDecoder};
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_until1};
 use nom::multi::many_m_n;
 use nom::Parser;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, RwLock};
+use xz2::read::{XzDecoder, XzEncoder};
 
 #[cfg(feature = "python")]
 use pyo3::create_exception;
@@ -143,20 +142,30 @@ create_exception!(
 
 // Symbol interning
 
-static STRING_INTERNER: LazyLock<Mutex<IndexSet<String>>> =
-    LazyLock::new(|| Mutex::new(IndexSet::new()));
+static STRING_INTERNER: LazyLock<RwLock<IndexSet<String>>> =
+    LazyLock::new(|| RwLock::new(IndexSet::new()));
 
 fn intern(s: String) -> u32 {
-    u32::try_from(STRING_INTERNER.lock().unwrap().insert_full(s).0).unwrap()
+    u32::try_from(STRING_INTERNER.write().unwrap().insert_full(s).0).unwrap()
 }
 
+/// Get the string in the string interner at a given position.
+/// Waits on interner read lock
 fn deintern(idx: u32) -> String {
-    STRING_INTERNER
-        .lock()
+    with_deinterned(idx, |x| x.to_string())
+}
+
+/// Perform an operation on the string nterned at idx
+/// Notably: the read lock is held for the whole duration of the operation.
+fn with_deinterned<F, X>(idx: u32, f: F) -> X
+where
+    F: FnOnce(&str) -> X,
+{
+    f(STRING_INTERNER
+        .read()
         .unwrap()
         .get_index(idx.try_into().unwrap())
-        .unwrap()
-        .clone()
+        .unwrap())
 }
 
 #[cfg_attr(
@@ -506,6 +515,12 @@ impl StringSymbol {
             },
         ))
     }
+
+    /// Perform a computation on a non-owned version of the symbol
+    /// Saves a clone
+    fn with_symbol<F, X>(&self, f: F) -> X where F: FnOnce(&str) -> X {
+        with_deinterned(self.string, f)
+    } 
 }
 
 impl PartialOrd for StringSymbol {
@@ -516,11 +531,13 @@ impl PartialOrd for StringSymbol {
 
 impl Ord for StringSymbol {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match other.string.cmp(&self.string) {
-            std::cmp::Ordering::Less => std::cmp::Ordering::Less,
-            std::cmp::Ordering::Equal => self.unknown.cmp(&other.unknown),
-            std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
-        }
+        with_deinterned(other.string, |other_str| {
+            with_deinterned(self.string, |self_str| match other_str.cmp(self_str) {
+                std::cmp::Ordering::Less => std::cmp::Ordering::Less,
+                std::cmp::Ordering::Equal => self.unknown.cmp(&other.unknown),
+                std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
+            })
+        })
     }
 }
 #[cfg_attr(feature = "python", pymethods)]
@@ -758,13 +775,12 @@ impl FlagDiacriticSymbol {
 
     pub fn get_symbol(&self) -> String {
         match self.value {
-            u32::MAX => format!("@{:?}.{}@", self.flag_type, deintern(self.key)),
-            value => format!(
-                "@{:?}.{}.{}@",
-                self.flag_type,
-                deintern(self.key),
-                deintern(value)
-            ),
+            u32::MAX => with_deinterned(self.key, |key| format!("@{:?}.{}@", self.flag_type, key)),
+            value => with_deinterned(self.key, |key| {
+                with_deinterned(value, |value| {
+                    format!("@{:?}.{}.{}@", self.flag_type, key, value)
+                })
+            }),
         }
     }
 
@@ -803,17 +819,17 @@ impl FlagDiacriticSymbol {
     /// Python-style string representation.
     pub fn __repr__(&self) -> String {
         match self.value {
-            u32::MAX => format!(
-                "FlagDiacriticSymbol({:?}, {:?})",
-                self.flag_type,
-                deintern(self.key)
-            ),
-            value => format!(
-                "FlagDiacriticSymbol({:?}, {:?}, {:?})",
-                self.flag_type,
-                deintern(self.key),
-                deintern(value)
-            ),
+            u32::MAX => with_deinterned(self.key, |key| {
+                format!("FlagDiacriticSymbol({:?}, {:?})", self.flag_type, key)
+            }),
+            value => with_deinterned(self.key, |key| {
+                with_deinterned(value, |value| {
+                    format!(
+                        "FlagDiacriticSymbol({:?}, {:?}, {:?})",
+                        self.flag_type, key, value
+                    )
+                })
+            }),
         }
     }
 
@@ -895,6 +911,17 @@ impl SpecialSymbol {
         }
     }
 
+
+    /// Perform a computation on a non-owned version of the symbol
+    /// Saves a clone
+    fn with_symbol<F, X>(&self, f: F) -> X where F: FnOnce(&str) -> X {
+        match self {
+            SpecialSymbol::EPSILON => f("@_EPSILON_SYMBOL_@"),
+            SpecialSymbol::IDENTITY => f("@_IDENTITY_SYMBOL_@"),
+            SpecialSymbol::UNKNOWN => f("@_UNKNOWN_SYMBOL_@"),
+        }
+    } 
+
     #[cfg(not(feature = "python"))]
     /// Parse a special symbol from a text representation.
     ///
@@ -949,11 +976,7 @@ impl SpecialSymbol {
     /// assert_eq!(SpecialSymbol::from_symbol_string("@0@").unwrap().get_symbol(), "@_EPSILON_SYMBOL_@".to_string())
     /// ```
     pub fn get_symbol(&self) -> String {
-        match self {
-            SpecialSymbol::EPSILON => "@_EPSILON_SYMBOL_@".to_string(),
-            SpecialSymbol::IDENTITY => "@_IDENTITY_SYMBOL_@".to_string(),
-            SpecialSymbol::UNKNOWN => "@_UNKNOWN_SYMBOL_@".to_string(),
-        }
+        self.with_symbol(|x| x.to_string())
     }
 
     #[cfg(feature = "python")]
@@ -987,13 +1010,13 @@ impl SpecialSymbol {
 
 impl std::fmt::Debug for SpecialSymbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.get_symbol())
+        self.with_symbol(|symbol| write!(f, "{}", symbol))
     }
 }
 
 impl std::fmt::Debug for StringSymbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.get_symbol())
+        self.with_symbol(|symbol| write!(f, "{}", symbol))
     }
 }
 
@@ -1059,35 +1082,196 @@ impl PartialOrd for Symbol {
 }
 
 impl Ord for Symbol {
+    /// cmp for Symbol tries to formalize the following:
+    /// - There is a set of *tokenizable symbol types*: Special, Flag and String (those that split_to_symbols can return).
+    /// - Between those types, there exists a slightly modified lexicographical ordering as such:
+    ///   primarily: a < b if the string representing a is longer than the string representing b
+    ///   secondarily: a < b if the equal-length string representing a is ordered before the string represeting b per string's cmp
+    ///   tertiarily: flag < special < string
+    ///   quaternarily: within a single symbol type, its own sort implementation holds
+    /// - Raw symbols are lesser than any other built-in symbols (external symbols can do what they want); they are internally ordered per their own cmp
+    /// - external symbols defer to their own sorting logic; if one member of the comparison is an external symbol, it is called upon to do the comparison
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match (self, other) {
-            // If we have the same type of symbol on both sides, defer to cmp (well-defined)
-            (Symbol::Special(a), Symbol::Special(b)) => a.cmp(b),
-            (Symbol::Flag(a), Symbol::Flag(b)) => a.cmp(b),
-            (Symbol::String(a), Symbol::String(b)) => a.cmp(b),
-            #[cfg(feature = "python")]
-            (Symbol::External(a), Symbol::External(b)) => a.cmp(b),
-            (Symbol::Raw(a), Symbol::Raw(b)) => a.cmp(b),
+        // 1. Is the input made up of tokenizable symbols only?
 
-            // If we have different types of symbols, they can't be strictly equal
-            // First, defer to the natural (reverse :D) ordering of strings
-            (a, b) => match b.get_symbol().cmp(&a.get_symbol()) {
-                // We can have a (degenerate) case where the symbol string is the same
-                // This should never happen if the symbols are parsed from att / kfst
-                // At any rate, exactly one of the symbols must be a string symbol (we checked for same type earlier)
-                // We are going to arbitrarily say that string symbols are lesser
-                std::cmp::Ordering::Equal => match (a, b) {
-                    (Symbol::String(_), _) => std::cmp::Ordering::Less,
-                    (_, Symbol::String(_)) => std::cmp::Ordering::Greater,
+        let self_is_tokenizable = match self {
+            Symbol::Special(_) => true,
+            Symbol::Flag(_) => true,
+            Symbol::String(_) => true,
+            _ => false,
+        };
 
-                    // Shouldn't be possible but let's have an informative panic
-                    _ => panic!(
-                        "Symbols {:?} and {:?} are being compared and are found to be equal",
-                        self, other
-                    ),
-                },
-                x => x,
-            },
+        let other_is_tokenizable = match other {
+            Symbol::Special(_) => true,
+            Symbol::Flag(_) => true,
+            Symbol::String(_) => true,
+            _ => false,
+        };
+
+        match (self_is_tokenizable, other_is_tokenizable) {
+            // If both are tokenizable...
+            (true, true) => {
+                // Do we get an ordering from the strings? ("primarily" and "secondarily")
+
+                // Use with_symbol to avoid a clone in the common cases of special symbols and epsilon symbols
+                let result = self.with_symbol(|self_sym| {
+                    other.with_symbol(|other_sym| (other_sym.len(), &self_sym).cmp(&(self_sym.len(), &other_sym)))
+                });
+                if result != Ordering::Equal {
+                    return result;
+                } else {
+                    match (self, other) {
+                        // Do the types induce and ordering ("tertiarily")
+                        (Symbol::Special(_), Symbol::Flag(_)) => return Ordering::Greater,
+                        (Symbol::Special(_), Symbol::String(_)) => return Ordering::Less,
+                        (Symbol::Flag(_), Symbol::Special(_)) => return Ordering::Less,
+                        (Symbol::Flag(_), Symbol::String(_)) => return Ordering::Less,
+                        (Symbol::String(_), Symbol::Special(_)) => return Ordering::Greater,
+                        (Symbol::String(_), Symbol::Flag(_)) => return Ordering::Greater,
+
+                        // Do we have two values of the same type => type-internal ordering holds
+                        (Symbol::Special(a), Symbol::Special(b)) => return a.cmp(b),
+                        (Symbol::Flag(a), Symbol::Flag(b)) => return a.cmp(b),
+                        (Symbol::String(a), Symbol::String(b)) => return a.cmp(b),
+
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            // At least one is non-tokenizable; do we have external symbols?
+            _ => {
+                match (self, other) {
+                    #[cfg(feature = "python")]
+                    (Symbol::External(left), right) => {
+                        Python::with_gil(|py| {
+                            // Strictly less than
+
+                            if (left
+                                .value
+                                .getattr(py, "__lt__")
+                                .unwrap_or_else(|_| {
+                                    panic!(
+                                        "Symbol {} doesn't have a __lt__ implementation.",
+                                        left.value
+                                    )
+                                })
+                                .call1(py, (right.clone().into_pyobject(py).unwrap(),))
+                                .unwrap_or_else(|_| {
+                                    panic!(
+                                        "__lt__ on symbol {} failed to return a value.",
+                                        left.value
+                                    )
+                                })
+                                .extract::<bool>(py)
+                                .unwrap_or_else(|_| {
+                                    panic!("__lt__ on symbol {} didn't return a bool.", left.value)
+                                }))
+                            {
+                                return Ordering::Less;
+                            }
+
+                            // Strictly equal
+
+                            if (left
+                                .value
+                                .getattr(py, "__eq__")
+                                .unwrap_or_else(|_| {
+                                    panic!(
+                                        "Symbol {} doesn't have a __eq__ implementation.",
+                                        left.value
+                                    )
+                                })
+                                .call1(py, (right.clone().into_pyobject(py).unwrap(),))
+                                .unwrap_or_else(|_| {
+                                    panic!(
+                                        "__qe__ on symbol {} failed to return a value.",
+                                        left.value
+                                    )
+                                })
+                                .extract::<bool>(py)
+                                .unwrap_or_else(|_| {
+                                    panic!("__qe__ on symbol {} didn't return a bool.", left.value)
+                                }))
+                            {
+                                return Ordering::Equal;
+                            }
+
+                            // Otherwise must be greater
+
+                            return Ordering::Greater;
+                        })
+                    }
+                    #[cfg(feature = "python")]
+                    (left, Symbol::External(right)) => {
+                        Python::with_gil(|py| {
+                            // Strictly less than
+
+                            if (right
+                                .value
+                                .getattr(py, "__lt__")
+                                .unwrap_or_else(|_| {
+                                    panic!(
+                                        "Symbol {} doesn't have a __lt__ implementation.",
+                                        right.value
+                                    )
+                                })
+                                .call1(py, (left.clone().into_pyobject(py).unwrap(),))
+                                .unwrap_or_else(|_| {
+                                    panic!(
+                                        "__lt__ on symbol {} failed to return a value.",
+                                        right.value
+                                    )
+                                })
+                                .extract::<bool>(py)
+                                .unwrap_or_else(|_| {
+                                    panic!("__lt__ on symbol {} didn't return a bool.", right.value)
+                                }))
+                            {
+                                return Ordering::Greater;
+                            }
+
+                            // Strictly equal
+
+                            if (right
+                                .value
+                                .getattr(py, "__eq__")
+                                .unwrap_or_else(|_| {
+                                    panic!(
+                                        "Symbol {} doesn't have a __eq__ implementation.",
+                                        right.value
+                                    )
+                                })
+                                .call1(py, (left.clone().into_pyobject(py).unwrap(),))
+                                .unwrap_or_else(|_| {
+                                    panic!(
+                                        "__eq__ on symbol {} failed to return a value.",
+                                        right.value
+                                    )
+                                })
+                                .extract::<bool>(py)
+                                .unwrap_or_else(|_| {
+                                    panic!("__eq__ on symbol {} didn't return a bool.", right.value)
+                                }))
+                            {
+                                return Ordering::Equal;
+                            }
+
+                            // Otherwise must be greater
+
+                            return Ordering::Less;
+                        })
+                    }
+
+                    // Do we have two raw symbols?
+                    (Symbol::Raw(a), Symbol::Raw(b)) => return a.cmp(b),
+
+                    // Raw symbols are lesser
+                    (Symbol::Raw(_), _) => return Ordering::Less,
+                    (_, Symbol::Raw(_)) => return Ordering::Greater,
+
+                    _ => unreachable!(),
+                }
+            }
         }
     }
 }
@@ -1132,6 +1316,19 @@ impl Symbol {
             #[cfg(feature = "python")]
             Symbol::External(py_object_symbol) => py_object_symbol.get_symbol(),
             Symbol::Raw(raw_symbol) => raw_symbol.get_symbol(),
+        }
+    }
+
+    /// Perform an operation on the &str representation of this symbol
+    /// In some cases (StringSymbol and SpecialSymbol), this avoids a clone
+    pub fn with_symbol<F, X> (&self, f: F) -> X where F: FnOnce(&str) -> X {
+        match self {
+            Symbol::Special(special_symbol) => special_symbol.with_symbol(f),
+            Symbol::Flag(flag_diacritic_symbol) => f(&flag_diacritic_symbol.get_symbol()),
+            Symbol::String(string_symbol) => string_symbol.with_symbol(f),
+            #[cfg(feature = "python")]
+            Symbol::External(py_object_symbol) => f(&py_object_symbol.get_symbol()),
+            Symbol::Raw(raw_symbol) => f(&raw_symbol.get_symbol()),
         }
     }
 }
@@ -1365,7 +1562,9 @@ impl FSTState {
 /// Cleans up escapes in att; in practice it converts @_TAB_@ and @_SPACE_@ to actual tab and space characters
 /// Open question: should newlines be handled somehow?
 fn unescape_att_symbol(att_symbol: &str) -> String {
-    att_symbol.replace("@_TAB_@", "\t").replace("@_SPACE_@", " ")
+    att_symbol
+        .replace("@_TAB_@", "\t")
+        .replace("@_SPACE_@", " ")
 }
 
 /// Escapes symbol for att compatibility; in practice converts tabs and spaces to @_TAB_@ and @_SPACE_@ sequences.
@@ -1671,7 +1870,9 @@ impl FST {
 
         let mut decomp: Vec<u8> = Vec::new();
         let mut decoder = XzDecoder::new(rest);
-        decoder.read_to_end(&mut decomp).map_err(|_| "Failed to xz-decompress remainder of file")?;
+        decoder
+            .read_to_end(&mut decomp)
+            .map_err(|_| "Failed to xz-decompress remainder of file")?;
 
         // The decompressed data is - unavoidably - owned by the function
         // We promise an error type of &[u8], which we can't provide from here because of lifetimes
@@ -1730,15 +1931,9 @@ impl FST {
             let bottom_symbol_idx: usize = bottom_symbol_idx.into();
             let top_symbol = symbol_list[top_symbol_idx].clone();
             let bottom_symbol = symbol_list[bottom_symbol_idx].clone();
-            rules.entry(from_state).or_default();
-            let handle = rules.get_mut(&from_state).unwrap();
-            if !handle.contains_key(&top_symbol) {
-                handle.insert(top_symbol.clone(), vec![]);
-            }
-            handle
-                .get_mut(&top_symbol)
-                .unwrap()
-                .push((to_state, bottom_symbol.clone(), weight));
+            let handle = rules.entry(from_state).or_default();
+            let vec = handle.entry(top_symbol).or_default();
+            vec.push((to_state, bottom_symbol, weight));
         }
 
         Ok(FST::from_rules(final_states, rules, symbols, None))
@@ -1791,11 +1986,7 @@ impl FST {
         // Dump symbols
 
         let mut sorted_syms: Vec<_> = self.symbols.iter().collect();
-        sorted_syms.sort_by(|a, b| {
-            let sym_a = a.get_symbol();
-            let sym_b = b.get_symbol();
-            (sym_a.chars().count(), sym_a).cmp(&(sym_b.chars().count(), sym_b))
-        });
+        sorted_syms.sort();
         for symbol in sorted_syms.iter() {
             result.extend(symbol.get_symbol().into_bytes());
             result.push(0); // Add null-terminators
@@ -1822,11 +2013,13 @@ impl FST {
                             target_state, x
                         )
                     })?;
-                    let top_index: u16 = sorted_syms.binary_search_by(|&probe| {
-            let sym_a = probe.get_symbol();
-            let sym_b = top_symbol.get_symbol();
-            (sym_a.chars().count(), sym_a).cmp(&(sym_b.chars().count(), sym_b))
-        }).map_err(|_| {
+                    let top_index: u16 = sorted_syms
+                        .binary_search_by(|&probe| {
+                            let sym_a = probe.get_symbol();
+                            let sym_b = top_symbol.get_symbol();
+                            (sym_a.chars().count(), sym_a).cmp(&(sym_b.chars().count(), sym_b))
+                        })
+                        .map_err(|_| {
                             format!("Top symbol {:?} not found in FST symbol list", top_symbol)
                         })
                         .and_then(|x| {
@@ -1834,11 +2027,13 @@ impl FST {
                                 format!("Can't represent top symbol index as u16: {}", x)
                             })
                         })?;
-                    let bottom_index: u16 = sorted_syms.binary_search_by(|&probe| {
-            let sym_a = probe.get_symbol();
-            let sym_b = bottom_symbol.get_symbol();
-            (sym_a.chars().count(), sym_a).cmp(&(sym_b.chars().count(), sym_b))
-        }).map_err(|_| {
+                    let bottom_index: u16 = sorted_syms
+                        .binary_search_by(|&probe| {
+                            let sym_a = probe.get_symbol();
+                            let sym_b = bottom_symbol.get_symbol();
+                            (sym_a.chars().count(), sym_a).cmp(&(sym_b.chars().count(), sym_b))
+                        })
+                        .map_err(|_| {
                             format!("Top symbol {:?} not found in FST symbol list", top_symbol)
                         })
                         .and_then(|x| {
@@ -1878,7 +2073,9 @@ impl FST {
         let mut compressed = vec![];
 
         let mut encoder = XzEncoder::new(to_compress.as_slice(), 9);
-        encoder.read_to_end(&mut compressed).map_err(|x| format!("Failed while compressing with lzma_rs: {}", x))?;
+        encoder
+            .read_to_end(&mut compressed)
+            .map_err(|x| format!("Failed while compressing with lzma_rs: {}", x))?;
         result.extend(compressed);
 
         Ok(result)
@@ -2037,23 +2234,23 @@ impl FST {
     /// 6"#.to_string(), false).unwrap();
     /// ```
     /// `debug` is passed along to [FST::debug].
-    /// 
+    ///
     /// kfst attempts to maintain compatibility with the hfst interpretation of AT&T. This includes the `@_TAB_@` and `@_SPACE_@` special sequences.
-    /// 
+    ///
     /// ```rust
     /// use kfst_rs::{FST, FSTState};
-    /// 
+    ///
     /// // @_TAB_@ and @_SPACE_@ escapes can appear both as top and bottom symbols
-    /// 
+    ///
     /// let f = FST::from_att_code(r#"4
     /// 0	1	@_TAB_@	a
     /// 1	2	b	@_TAB_@x
     /// 2	3	@_SPACE_@	c
     /// 3	4	d	@_SPACE_@
     /// "#.to_string(), false).unwrap();
-    /// 
+    ///
     /// // The read-in transducer then correctly handles tabs and spaces
-    /// 
+    ///
     /// assert_eq!(f.lookup("\tb d", FSTState::default(), false).unwrap(), vec![("a\txc ".to_string(), 0.0)]);
     /// ```
     pub fn from_att_code(att_code: String, debug: bool) -> KFSTResult<FST> {
@@ -2368,20 +2565,20 @@ impl FST {
     ///  
     /// ```rust
     /// use kfst_rs::FST;
-    /// 
+    ///
     /// // @_TAB_@ and @_SPACE_@ escapes can appear both as top and bottom symbols
-    /// 
+    ///
     /// let code = r#"4
     /// 0	1	@_TAB_@	a
     /// 1	2	b	@_TAB_@x
     /// 2	3	@_SPACE_@	c
     /// 3	4	d	@_SPACE_@"#;
-    /// 
+    ///
     /// let f = FST::from_att_code(code.to_string(), false).unwrap();
     /// assert_eq!(f.to_att_code(), code.to_string());
     /// ```
-    /// 
-    /// 
+    ///
+    ///
     pub fn to_att_code(&self) -> String {
         let mut rows: Vec<String> = vec![];
         for (state, weight) in self.final_states.iter() {
