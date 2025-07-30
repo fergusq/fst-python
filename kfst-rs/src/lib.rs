@@ -2014,11 +2014,7 @@ impl FST {
                         )
                     })?;
                     let top_index: u16 = sorted_syms
-                        .binary_search_by(|&probe| {
-                            let sym_a = probe.get_symbol();
-                            let sym_b = top_symbol.get_symbol();
-                            (sym_a.chars().count(), sym_a).cmp(&(sym_b.chars().count(), sym_b))
-                        })
+                        .binary_search(&top_symbol)
                         .map_err(|_| {
                             format!("Top symbol {:?} not found in FST symbol list", top_symbol)
                         })
@@ -2028,13 +2024,9 @@ impl FST {
                             })
                         })?;
                     let bottom_index: u16 = sorted_syms
-                        .binary_search_by(|&probe| {
-                            let sym_a = probe.get_symbol();
-                            let sym_b = bottom_symbol.get_symbol();
-                            (sym_a.chars().count(), sym_a).cmp(&(sym_b.chars().count(), sym_b))
-                        })
+                        .binary_search(&bottom_symbol)
                         .map_err(|_| {
-                            format!("Top symbol {:?} not found in FST symbol list", top_symbol)
+                            format!("Bottom symbol {:?} not found in FST symbol list", bottom_symbol)
                         })
                         .and_then(|x| {
                             x.try_into().map_err(|x| {
