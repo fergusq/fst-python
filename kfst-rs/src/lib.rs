@@ -2340,6 +2340,8 @@ impl FST {
                 let char = slice.chars().next().unwrap();
                 slice = &slice[char.len_utf8()..];
                 result.push(Symbol::String(StringSymbol::new(char.to_string(), false)));
+                len_left -= char.len_utf8();
+                found = true;
             }
             if !found {
                 return None;
