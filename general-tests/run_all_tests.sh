@@ -12,9 +12,11 @@ python format_test.py
 python deptest.py
 python import_test.py
 python test_pypykko.py
+python symbol_test.py
 
 pip uninstall kfst-rs -y
 
 python deptest.py
 python import_test.py
 python test_pypykko.py
+python symbol_test.py
