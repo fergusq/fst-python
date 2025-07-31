@@ -1039,7 +1039,7 @@ pub fn from_symbol_string(symbol: &str) -> Option<Symbol> {
     Symbol::parse(symbol).ok().map(|(_, sym)| sym)
 }
 
-/// A wrapper enum for different concrete symbol types. It exists to provide a dense tagged avoiding dynamic dispatch.
+/// A wrapper enum for different concrete symbol types. It exists to provide a dense tagged union avoiding dynamic dispatch.
 /// It also deals with converting symbols between Rust and Python when using kfst_rs as a Python library. (crate feature "python")
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Symbol {
