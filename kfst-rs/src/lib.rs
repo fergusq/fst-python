@@ -561,6 +561,7 @@ impl StringSymbol {
 
     #[cfg(feature = "python")]
     #[new]
+    #[pyo3(signature = (string, unknown = false))]
     fn new(string: String, unknown: bool) -> Self {
         StringSymbol {
             string: intern(string),
