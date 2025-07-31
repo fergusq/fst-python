@@ -811,7 +811,6 @@ impl FlagDiacriticSymbol {
 
     #[cfg(feature = "python")]
     #[new]
-    #[pyo3(signature = (flag_type, key, value = None))]
     fn new(flag_type: String, key: String, value: Option<String>) -> KFSTResult<Self> {
         FlagDiacriticSymbol::_new(flag_type, key, value)
     }
