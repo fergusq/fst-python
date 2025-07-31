@@ -1,4 +1,8 @@
 set -e 1
+# Cargo tests
+
+cd ../kfst-rs; cargo test; cd ../general-tests
+
 # These tests want both kfst_py and kfst_rs installed
 
 pip install ../kfst-rs
