@@ -59,7 +59,7 @@ class FST(NamedTuple):
         """
         Creates an FST from a dictionary of final states, a dictionary of rules and a set of symbols.
         """
-        return FST(final_states, rules, sorted(symbols, key=lambda s: -len(s.get_symbol())), debug=debug)
+        return FST(final_states, rules, sorted(symbols, key=lambda s: (-len(s.get_symbol()), s.get_symbol())), debug=debug)
 
     @staticmethod
     def from_att_file(att_file: str | Path, debug: bool = False) -> "FST":
