@@ -34,10 +34,11 @@ class FSTState(NamedTuple):
     path_weight: float = 0
     input_flags: Map[str, tuple[bool, str]] = Map()
     output_flags: Map[str, tuple[bool, str]] = Map()
+    input_indices: tuple[int, ...] = tuple()
     output_symbols: tuple[Symbol, ...] = tuple()
 
     def __repr__(self):
-        return f"FSTState({self.state_num}, {self.path_weight}, {self.input_flags}, {self.output_flags}, {self.output_symbols})"
+        return f"FSTState({self.state_num}, {self.path_weight}, {self.input_flags}, {self.output_flags}, {self.input_indices}, {self.output_symbols})"
 
 
 class FST(NamedTuple):
@@ -181,34 +182,34 @@ class FST(NamedTuple):
         
         return ans
 
-    def run_fst(self, input_symbols: list[Symbol], state=FSTState(0), post_input_advance=False) -> Generator[tuple[bool, bool, FSTState], None, None]:
+    def run_fst(self, input_symbols: list[Symbol], input_symbol_index: int, state=FSTState(0), post_input_advance=False) -> Generator[tuple[bool, bool, FSTState], None, None]:
         """
         Runs the FST on the given input symbols, starting from the given state (by default 0).
         Yields an (bool, FSTState) tuple for each path. If the path ended in a final state, the bool will be True, otherwise False.
         """
         transitions = self.rules.get(state.state_num, {})
-        if not input_symbols:
+        if len(input_symbols) - input_symbol_index == 0:
             yield state.state_num in self.final_states, post_input_advance, state._replace(path_weight=state.path_weight + self.final_states.get(state.state_num, 0))
             isymbol = None
 
         else:
-            isymbol = input_symbols[0]
+            isymbol = input_symbols[input_symbol_index]
 
         for transition_isymbol in transitions:
             if transition_isymbol.is_epsilon() or isymbol is not None and transition_isymbol == isymbol:
-                yield from self._transition(input_symbols, state, transitions[transition_isymbol], isymbol, transition_isymbol)
+                yield from self._transition(input_symbols, input_symbol_index, state, transitions[transition_isymbol], isymbol, transition_isymbol)
         
         if isymbol is not None and isymbol.is_unknown():
             if SpecialSymbol.UNKNOWN in transitions:
-                yield from self._transition(input_symbols, state, transitions[SpecialSymbol.UNKNOWN], isymbol, SpecialSymbol.UNKNOWN)
+                yield from self._transition(input_symbols, input_symbol_index, state, transitions[SpecialSymbol.UNKNOWN], isymbol, SpecialSymbol.UNKNOWN)
             
             if SpecialSymbol.IDENTITY in transitions:
-                yield from self._transition(input_symbols, state, transitions[SpecialSymbol.IDENTITY], isymbol, SpecialSymbol.IDENTITY)
+                yield from self._transition(input_symbols, input_symbol_index, state, transitions[SpecialSymbol.IDENTITY], isymbol, SpecialSymbol.IDENTITY)
     
-    def _transition(self, input_symbols: list[Symbol], state: FSTState, transitions: list[tuple[int, Symbol, float]], isymbol: Symbol | None, transition_isymbol: Symbol) -> Generator[tuple[bool, bool, FSTState], None, None]:
+    def _transition(self, input_symbols: list[Symbol], input_symbol_index: int, state: FSTState, transitions: list[tuple[int, Symbol, float]], isymbol: Symbol | None, transition_isymbol: Symbol) -> Generator[tuple[bool, bool, FSTState], None, None]:
         for next_state, osymbol, weight in transitions:
             if self.debug:
-                print(state.state_num, "->", next_state, transition_isymbol, osymbol, input_symbols, state)
+                print(state.state_num, "->", next_state, transition_isymbol, osymbol, input_symbols, input_symbol_index, state)
             
             new_output_flags = self._update_flags(osymbol, state.output_flags)
             if new_output_flags is None:
@@ -218,21 +219,22 @@ class FST(NamedTuple):
             if new_input_flags is None:
                 continue  # flag unification failed
 
-            o = (isymbol,) if isymbol is not None and osymbol == SpecialSymbol.IDENTITY else (osymbol,) if not osymbol.is_epsilon() else ()
+            o = (isymbol,) if isymbol is not None and osymbol == SpecialSymbol.IDENTITY else (osymbol,)
 
             new_state = FSTState(
                 state_num=next_state,
                 path_weight=state.path_weight + weight,
                 input_flags=new_input_flags,
                 output_flags=new_output_flags,
+                input_indices=state.input_indices + (input_symbol_index,),
                 output_symbols=state.output_symbols + o
             )
 
             if transition_isymbol.is_epsilon():
-                yield from self.run_fst(input_symbols, state=new_state, post_input_advance=len(input_symbols) == 0)
+                yield from self.run_fst(input_symbols, input_symbol_index, state=new_state, post_input_advance=len(input_symbols)-input_symbol_index == 0)
             
             else:
-                yield from self.run_fst(input_symbols[1:], state=new_state)
+                yield from self.run_fst(input_symbols, input_symbol_index+1, state=new_state)
     
     def lookup(self, input: str, state=FSTState(0), allow_unknown=True) -> Generator[tuple[str, float], None, None]:
         """
@@ -249,7 +251,7 @@ class FST(NamedTuple):
         if input_symbols is None:
             raise TokenizationException("Input cannot be split into symbols")
 
-        results = self.run_fst(input_symbols, state=state)
+        results = self.run_fst(input_symbols, 0, state=state)
         results = sorted(results, key=lambda x: x[2].path_weight)
         already_seen = set()
         for finished, _, state in results:
@@ -258,7 +260,35 @@ class FST(NamedTuple):
 
             w = state.path_weight
             os = state.output_symbols
-            o = "".join(s.get_symbol() for s in os)
+            o = "".join(s.get_symbol() for s in os if not s.is_epsilon())
+            if o not in already_seen:
+                yield o, w
+                already_seen.add(o)
+    
+    def lookup_aligned(self, input: str, state=FSTState(0), allow_unknown=True) -> Generator[tuple[tuple[tuple[int, Symbol], ...], float], None, None]:
+        """
+        Runs the FST on the given input symbols, starting from the given state (by default 0).
+        Yields a tuple of (output_symbols, path_weight) for each successful path.
+        
+        Otherwise same as run_fst, but operates on strings instead of symbol lists, filters out duplicate outputs and sorts the results by weight.
+
+        Raises a TokenizationException if the input string can not be converted into the symbols of the KFST transducer.
+        Note that if allow_unknown is True, all strings will be tokenized successfully.
+        """
+
+        input_symbols = self.split_to_symbols(input, allow_unknown=allow_unknown)
+        if input_symbols is None:
+            raise TokenizationException("Input cannot be split into symbols")
+
+        results = self.run_fst(input_symbols, 0, state=state)
+        results = sorted(results, key=lambda x: x[2].path_weight)
+        already_seen = set()
+        for finished, _, state in results:
+            if not finished:
+                continue
+
+            w = state.path_weight
+            o = tuple(zip(state.input_indices, state.output_symbols))
             if o not in already_seen:
                 yield o, w
                 already_seen.add(o)
