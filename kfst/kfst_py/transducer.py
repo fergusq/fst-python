@@ -194,6 +194,8 @@ class FST(NamedTuple):
 
         else:
             isymbol = input_symbols[input_symbol_index]
+        
+        assert len(input_symbols) - input_symbol_index >= 0 # Catastrophic failure
 
         for transition_isymbol in transitions:
             if transition_isymbol.is_epsilon() or isymbol is not None and transition_isymbol == isymbol:
