@@ -532,11 +532,7 @@ impl PartialOrd for StringSymbol {
 impl Ord for StringSymbol {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         with_deinterned(other.string, |other_str| {
-            with_deinterned(self.string, |self_str| match other_str.cmp(self_str) {
-                std::cmp::Ordering::Less => std::cmp::Ordering::Less,
-                std::cmp::Ordering::Equal => self.unknown.cmp(&other.unknown),
-                std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
-            })
+            with_deinterned(self.string, |self_str| (other_str.chars().count(), &self_str, self.unknown).cmp(&(self_str.chars().count(), &other_str, other.unknown)))
         })
     }
 }
@@ -663,7 +659,9 @@ impl PartialOrd for FlagDiacriticSymbol {
 impl Ord for FlagDiacriticSymbol {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // This should be clean; there is a bijection between all flag diacritics and a subset of strings
-        other.get_symbol().cmp(&self.get_symbol())
+        let other_str = other.get_symbol();
+        let self_str = self.get_symbol();
+        (other_str.chars().count(), &self_str).cmp(&(self_str.chars().count(), &other_str))
     }
 }
 
@@ -949,7 +947,11 @@ impl PartialOrd for SpecialSymbol {
 impl Ord for SpecialSymbol {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // This should be clean; there is a bijection between all special symbols and a subset of strings
-        other.get_symbol().cmp(&self.get_symbol())
+        self.with_symbol(|self_str| {
+            other.with_symbol(|other_str| 
+                        (other_str.chars().count(), &self_str).cmp(&(self_str.chars().count(), &other_str))
+            )
+        })
     }
 }
 
