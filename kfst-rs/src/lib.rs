@@ -1184,13 +1184,13 @@ impl Ord for Symbol {
                                 .call1(py, (right.clone().into_pyobject(py).unwrap(),))
                                 .unwrap_or_else(|_| {
                                     panic!(
-                                        "__qe__ on symbol {} failed to return a value.",
+                                        "__eq__ on symbol {} failed to return a value.",
                                         left.value
                                     )
                                 })
                                 .extract::<bool>(py)
                                 .unwrap_or_else(|_| {
-                                    panic!("__qe__ on symbol {} didn't return a bool.", left.value)
+                                    panic!("__eq__ on symbol {} didn't return a bool.", left.value)
                                 }))
                             {
                                 return Ordering::Equal;
