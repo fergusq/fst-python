@@ -3274,6 +3274,25 @@ fn test_raw_symbols() {
     );
 }
 
+#[test]
+fn test_string_comparison_order_for_tokenizable_symbol_types() {
+    assert!(StringSymbol::new("aa".to_string(), false) < StringSymbol::new("a".to_string(), false));
+    assert!(StringSymbol::new("aa".to_string(), true) > StringSymbol::new("aa".to_string(), false));
+    assert!(
+        StringSymbol::new("ab".to_string(), false) > StringSymbol::new("aa".to_string(), false)
+    );
+
+    assert!(
+        FlagDiacriticSymbol::parse("@U.aa@").unwrap()
+            < FlagDiacriticSymbol::parse("@U.a@").unwrap()
+    );
+    assert!(
+        FlagDiacriticSymbol::parse("@U.ab@").unwrap()
+            > FlagDiacriticSymbol::parse("@U.aa@").unwrap()
+    );
+    assert!(SpecialSymbol::IDENTITY < SpecialSymbol::EPSILON); // "@0@" is the shorter string
+}
+
 /// A Python module implemented in Rust.
 #[cfg(feature = "python")]
 #[pymodule]
