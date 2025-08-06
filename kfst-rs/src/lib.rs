@@ -2311,7 +2311,7 @@ impl FST {
 
     fn _split_to_symbols(&self, text: &str, allow_unknown: bool) -> Option<Vec<Symbol>> {
         let mut result = vec![];
-        let max_len = self
+        let max_byte_len = self
             .symbols
             .iter()
             .filter(|x| match x {
@@ -2320,14 +2320,13 @@ impl FST {
                 Symbol::Flag(_) => true,
                 _ => false,
             })
-            .map(|x| x.with_symbol(|s| s.chars().count()))
+            .map(|x| x.with_symbol(|s| s.len()))
             .next()
             .unwrap_or(0);
         let mut slice = text;
-        let mut len_left = slice.len(); // Actually want bytes here!
-        while len_left > 0 {
+        while !slice.is_empty() {
             let mut found = false;
-            'outer: for length in (0..std::cmp::min(max_len, len_left) + 1).rev() {
+            'outer: for length in (0..std::cmp::min(max_byte_len, slice.len()) + 1).rev() {
                 if !slice.is_char_boundary(length) {
                     continue;
                 }
@@ -2344,25 +2343,16 @@ impl FST {
                     if sym.with_symbol(|s| s != key) {
                         break;
                     }
-                    if match sym {
-                        Symbol::String(_) => true,
-                        Symbol::Special(_) => true,
-                        Symbol::Flag(_) => true,
-                        _ => false,
-                    } {
-                        result.push(sym.clone());
-                        slice = &slice[length..];
-                        len_left -= length;
-                        found = true;
-                        break 'outer;
-                    }
+                    result.push(sym.clone());
+                    slice = &slice[length..];
+                    found = true;
+                    break 'outer;
                 }
             }
             if (!found) && allow_unknown {
                 let char = slice.chars().next().unwrap();
                 slice = &slice[char.len_utf8()..];
                 result.push(Symbol::String(StringSymbol::new(char.to_string(), false)));
-                len_left -= char.len_utf8();
                 found = true;
             }
             if !found {
