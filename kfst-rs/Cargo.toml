@@ -1,6 +1,6 @@
 [package]
 name = "kfst-rs"
-version = "0.2.4"
+version = "0.2.5-beta.1"
 edition = "2021"
 authors = ["Théo Salmenkivi-Friberg <theo.friberg@helsinki.fi>", "Iikka Hauhio <iikka.hauhio@helsinki.fi>"]
 license = "LGPL-3.0-or-later"
