@@ -44,6 +44,7 @@ if not TYPE_CHECKING:
         from kfst_py.symbols import Symbol
         kfst_rs.symbols.Symbol = Symbol
         sys.modules['kfst.symbols'] = kfst_rs.symbols
+        sys.modules['kfst.symbols'].__all__.append("Symbol") # Fixes from kfst.symbols import * behaviour
         # nb. transducer and symbols patch itself
         BACKEND = "kfst_rs"
         # FST and TokenizationException should be visible from the top level

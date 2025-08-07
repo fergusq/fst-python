@@ -20,12 +20,16 @@ assert list(rs_fst.lookup("\tb d")) == [("a\txc ", 0)]
 
 print("Format test 2: kfst export produces identical transducers on voikko; identical fst object per both kfst-rs and kfst-py (if not byte-identical)")
 
-assert kfst_py.FST.from_kfst_bytes(kfst.FST.from_att_file("voikko.att").to_kfst_bytes()) == kfst_py.FST.from_kfst_bytes(kfst_py.FST.from_att_file("voikko.att").to_kfst_bytes())
-
 def compare_kfst_rs(a, b):
-    assert dict(a.final_states) == dict(b.final_states)
+    assert list(dict(a.final_states).items()) == list(dict(b.final_states).items())
     cvt = lambda x: {source: {sym: list(trans) for sym, trans in rulebook.items()} for source, rulebook in x.rules.items()}
     assert cvt(a) == cvt(b)
-    assert set(a.symbols) == set(b.symbols)
+    assert list(a.symbols) == list(b.symbols)
     assert a.debug == b.debug
+
+
+compare_kfst_rs(kfst_py.FST.from_kfst_bytes(kfst.FST.from_att_file("voikko.att").to_kfst_bytes()), kfst_py.FST.from_kfst_bytes(kfst_py.FST.from_att_file("voikko.att").to_kfst_bytes()))
+
+assert kfst_py.FST.from_kfst_bytes(kfst.FST.from_att_file("voikko.att").to_kfst_bytes()) == kfst_py.FST.from_kfst_bytes(kfst_py.FST.from_att_file("voikko.att").to_kfst_bytes())
+
 compare_kfst_rs(kfst.FST.from_kfst_bytes(kfst.FST.from_att_file("voikko.att").to_kfst_bytes()), kfst.FST.from_kfst_bytes(kfst_py.FST.from_att_file("voikko.att").to_kfst_bytes()))
