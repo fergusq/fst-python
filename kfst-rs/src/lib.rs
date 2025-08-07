@@ -1395,8 +1395,8 @@ impl FromPyObject<'_> for Symbol {
             .map(Symbol::Special)
             .or_else(|_| ob.extract().map(Symbol::Flag))
             .or_else(|_| ob.extract().map(Symbol::String))
-            .or_else(|_| ob.extract().map(Symbol::External))
             .or_else(|_| ob.extract().map(Symbol::Raw))
+            .or_else(|_| ob.extract().map(Symbol::External))
     }
 }
 #[derive(Clone, Debug, PartialEq, Hash)]
