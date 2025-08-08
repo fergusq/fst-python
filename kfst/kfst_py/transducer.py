@@ -182,7 +182,7 @@ class FST(NamedTuple):
         
         return ans
 
-    def run_fst(self, input_symbols: list[Symbol], input_symbol_index: int, state=FSTState(0), post_input_advance=False) -> Generator[tuple[bool, bool, FSTState], None, None]:
+    def run_fst(self, input_symbols: list[Symbol], state=FSTState(0), post_input_advance=False, input_symbol_index: int = 0) -> Generator[tuple[bool, bool, FSTState], None, None]:
         """
         Runs the FST on the given input symbols, starting from the given state (by default 0).
         Yields an (bool, FSTState) tuple for each path. If the path ended in a final state, the bool will be True, otherwise False.
@@ -199,16 +199,16 @@ class FST(NamedTuple):
 
         for transition_isymbol in transitions:
             if transition_isymbol.is_epsilon() or isymbol is not None and transition_isymbol == isymbol:
-                yield from self._transition(input_symbols, input_symbol_index, state, transitions[transition_isymbol], isymbol, transition_isymbol)
+                yield from self._transition(input_symbols, state, transitions[transition_isymbol], isymbol, transition_isymbol, input_symbol_index)
         
         if isymbol is not None and isymbol.is_unknown():
             if SpecialSymbol.UNKNOWN in transitions:
-                yield from self._transition(input_symbols, input_symbol_index, state, transitions[SpecialSymbol.UNKNOWN], isymbol, SpecialSymbol.UNKNOWN)
+                yield from self._transition(input_symbols, state, transitions[SpecialSymbol.UNKNOWN], isymbol, SpecialSymbol.UNKNOWN, input_symbol_index)
             
             if SpecialSymbol.IDENTITY in transitions:
-                yield from self._transition(input_symbols, input_symbol_index, state, transitions[SpecialSymbol.IDENTITY], isymbol, SpecialSymbol.IDENTITY)
+                yield from self._transition(input_symbols, state, transitions[SpecialSymbol.IDENTITY], isymbol, SpecialSymbol.IDENTITY, input_symbol_index)
     
-    def _transition(self, input_symbols: list[Symbol], input_symbol_index: int, state: FSTState, transitions: list[tuple[int, Symbol, float]], isymbol: Symbol | None, transition_isymbol: Symbol) -> Generator[tuple[bool, bool, FSTState], None, None]:
+    def _transition(self, input_symbols: list[Symbol], state: FSTState, transitions: list[tuple[int, Symbol, float]], isymbol: Symbol | None, transition_isymbol: Symbol, input_symbol_index: int = 0) -> Generator[tuple[bool, bool, FSTState], None, None]:
         for next_state, osymbol, weight in transitions:
             if self.debug:
                 print(state.state_num, "->", next_state, transition_isymbol, osymbol, input_symbols, input_symbol_index, state)
@@ -233,10 +233,10 @@ class FST(NamedTuple):
             )
 
             if transition_isymbol.is_epsilon():
-                yield from self.run_fst(input_symbols, input_symbol_index, state=new_state, post_input_advance=len(input_symbols)-input_symbol_index == 0)
+                yield from self.run_fst(input_symbols, state=new_state, post_input_advance=len(input_symbols)-input_symbol_index == 0, input_symbol_index=input_symbol_index)
             
             else:
-                yield from self.run_fst(input_symbols, input_symbol_index+1, state=new_state)
+                yield from self.run_fst(input_symbols, state=new_state, input_symbol_index=input_symbol_index+1)
     
     def lookup(self, input: str, state=FSTState(0), allow_unknown=True) -> Generator[tuple[str, float], None, None]:
         """
@@ -253,7 +253,7 @@ class FST(NamedTuple):
         if input_symbols is None:
             raise TokenizationException("Input cannot be split into symbols")
 
-        results = self.run_fst(input_symbols, 0, state=state)
+        results = self.run_fst(input_symbols, state=state, input_symbol_index=0)
         results = sorted(results, key=lambda x: x[2].path_weight)
         already_seen = set()
         for finished, _, state in results:
@@ -282,7 +282,7 @@ class FST(NamedTuple):
         if input_symbols is None:
             raise TokenizationException("Input cannot be split into symbols")
 
-        results = self.run_fst(input_symbols, 0, state=state)
+        results = self.run_fst(input_symbols, state=state, input_symbol_index=0)
         results = sorted(results, key=lambda x: x[2].path_weight)
         already_seen = set()
         for finished, _, state in results:
