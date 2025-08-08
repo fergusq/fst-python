@@ -42,4 +42,3 @@ assert sorted(k) == [Ext("Enten"), Ext("Teelikamenten"), Ext("Tenten"), StringSy
 print("Check default values of direct symbol initialisation")
 
 assert StringSymbol("X") == StringSymbol("X", False)
-assert StringSymbol("X") == StringSymbol("X", False)

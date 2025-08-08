@@ -1,11 +1,17 @@
-use std::hint::black_box;
 use criterion::{criterion_group, criterion_main, Criterion};
 use kfst_rs::{FSTState, FST};
+use std::hint::black_box;
 
 fn load_pypykko(c: &mut Criterion) {
-    c.bench_function("load pypykko", |b| b.iter(|| black_box(FST::from_kfst_file(black_box("../pypykko/pypykko/fi-parser.kfst".to_string()), false))));
+    c.bench_function("load pypykko", |b| {
+        b.iter(|| {
+            black_box(FST::from_kfst_file(
+                black_box("../pypykko/pypykko/fi-parser.kfst".to_string()),
+                false,
+            ))
+        })
+    });
 }
-
 
 fn run_voikko(c: &mut Criterion) {
     let paragraph = [
@@ -108,19 +114,21 @@ fn run_voikko(c: &mut Criterion) {
         vec![("[Ln][Xp]sapatti[X]sapat[Sg][Ny]in[Bh][Bc][Ln][Xp]päivä[X]päiv[Sg][Ny]än", 0.0)],
         vec![("[Lt][Xp]pyhittää[X]pyhittä[Ln]m[Xj]ä[X][Rm]ä[Sab][Ny]ttä", 0.0), ("[Lt][Xp]pyhittää[X]pyhittä[Tn3][Ny][Sab]mättä", 0.0)],
     ];
-    let voikko = FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
-    c.bench_function("run voikko", |b| b.iter(|| {
-        for (input, gold_val) in paragraph.iter().zip(gold.iter()) {
-            let analysis = voikko.lookup(input, FSTState::default(), true);
-            for (a, b) in analysis.unwrap().into_iter().zip(gold_val) {
-                assert!(a.0.as_str() == b.0);
-                assert!(a.1 == b.1);
+    let voikko =
+        FST::from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
+    c.bench_function("run voikko", |b| {
+        b.iter(|| {
+            for (input, gold_val) in paragraph.iter().zip(gold.iter()) {
+                let analysis = voikko.lookup(input, FSTState::default(), true);
+                for (a, b) in analysis.unwrap().into_iter().zip(gold_val) {
+                    assert!(a.0.as_str() == b.0);
+                    assert!(a.1 == b.1);
+                }
             }
-        }
-    }));
+        })
+    });
 }
 
 criterion_group!(benches, load_pypykko, run_voikko);
-
 
 criterion_main!(benches);

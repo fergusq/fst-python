@@ -518,9 +518,12 @@ impl StringSymbol {
 
     /// Perform a computation on a non-owned version of the symbol
     /// Saves a clone
-    fn with_symbol<F, X>(&self, f: F) -> X where F: FnOnce(&str) -> X {
+    fn with_symbol<F, X>(&self, f: F) -> X
+    where
+        F: FnOnce(&str) -> X,
+    {
         with_deinterned(self.string, f)
-    } 
+    }
 }
 
 impl PartialOrd for StringSymbol {
@@ -532,10 +535,12 @@ impl PartialOrd for StringSymbol {
 impl Ord for StringSymbol {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         with_deinterned(other.string, |other_str| {
-            with_deinterned(self.string, |self_str| match other_str.cmp(self_str) {
-                std::cmp::Ordering::Less => std::cmp::Ordering::Less,
-                std::cmp::Ordering::Equal => self.unknown.cmp(&other.unknown),
-                std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
+            with_deinterned(self.string, |self_str| {
+                (other_str.chars().count(), &self_str, self.unknown).cmp(&(
+                    self_str.chars().count(),
+                    &other_str,
+                    other.unknown,
+                ))
             })
         })
     }
@@ -663,7 +668,9 @@ impl PartialOrd for FlagDiacriticSymbol {
 impl Ord for FlagDiacriticSymbol {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // This should be clean; there is a bijection between all flag diacritics and a subset of strings
-        other.get_symbol().cmp(&self.get_symbol())
+        let other_str = other.get_symbol();
+        let self_str = self.get_symbol();
+        (other_str.chars().count(), &self_str).cmp(&(self_str.chars().count(), &other_str))
     }
 }
 
@@ -911,16 +918,18 @@ impl SpecialSymbol {
         }
     }
 
-
     /// Perform a computation on a non-owned version of the symbol
     /// Saves a clone
-    fn with_symbol<F, X>(&self, f: F) -> X where F: FnOnce(&str) -> X {
+    fn with_symbol<F, X>(&self, f: F) -> X
+    where
+        F: FnOnce(&str) -> X,
+    {
         match self {
             SpecialSymbol::EPSILON => f("@_EPSILON_SYMBOL_@"),
             SpecialSymbol::IDENTITY => f("@_IDENTITY_SYMBOL_@"),
             SpecialSymbol::UNKNOWN => f("@_UNKNOWN_SYMBOL_@"),
         }
-    } 
+    }
 
     #[cfg(not(feature = "python"))]
     /// Parse a special symbol from a text representation.
@@ -949,7 +958,11 @@ impl PartialOrd for SpecialSymbol {
 impl Ord for SpecialSymbol {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // This should be clean; there is a bijection between all special symbols and a subset of strings
-        other.get_symbol().cmp(&self.get_symbol())
+        self.with_symbol(|self_str| {
+            other.with_symbol(|other_str| {
+                (other_str.chars().count(), &self_str).cmp(&(self_str.chars().count(), &other_str))
+            })
+        })
     }
 }
 
@@ -1115,7 +1128,10 @@ impl Ord for Symbol {
 
                 // Use with_symbol to avoid a clone in the common cases of special symbols and epsilon symbols
                 let result = self.with_symbol(|self_sym| {
-                    other.with_symbol(|other_sym| (other_sym.chars().count(), &self_sym).cmp(&(self_sym.chars().count(), &other_sym)))
+                    other.with_symbol(|other_sym| {
+                        (other_sym.chars().count(), &self_sym)
+                            .cmp(&(self_sym.chars().count(), &other_sym))
+                    })
                 });
                 if result != Ordering::Equal {
                     return result;
@@ -1184,13 +1200,13 @@ impl Ord for Symbol {
                                 .call1(py, (right.clone().into_pyobject(py).unwrap(),))
                                 .unwrap_or_else(|_| {
                                     panic!(
-                                        "__qe__ on symbol {} failed to return a value.",
+                                        "__eq__ on symbol {} failed to return a value.",
                                         left.value
                                     )
                                 })
                                 .extract::<bool>(py)
                                 .unwrap_or_else(|_| {
-                                    panic!("__qe__ on symbol {} didn't return a bool.", left.value)
+                                    panic!("__eq__ on symbol {} didn't return a bool.", left.value)
                                 }))
                             {
                                 return Ordering::Equal;
@@ -1321,7 +1337,10 @@ impl Symbol {
 
     /// Perform an operation on the &str representation of this symbol
     /// In some cases (StringSymbol and SpecialSymbol), this avoids a clone
-    pub fn with_symbol<F, X> (&self, f: F) -> X where F: FnOnce(&str) -> X {
+    pub fn with_symbol<F, X>(&self, f: F) -> X
+    where
+        F: FnOnce(&str) -> X,
+    {
         match self {
             Symbol::Special(special_symbol) => special_symbol.with_symbol(f),
             Symbol::Flag(flag_diacritic_symbol) => f(&flag_diacritic_symbol.get_symbol()),
@@ -1376,8 +1395,8 @@ impl FromPyObject<'_> for Symbol {
             .map(Symbol::Special)
             .or_else(|_| ob.extract().map(Symbol::Flag))
             .or_else(|_| ob.extract().map(Symbol::String))
-            .or_else(|_| ob.extract().map(Symbol::External))
             .or_else(|_| ob.extract().map(Symbol::Raw))
+            .or_else(|_| ob.extract().map(Symbol::External))
     }
 }
 #[derive(Clone, Debug, PartialEq, Hash)]
@@ -2042,7 +2061,10 @@ impl FST {
                     let bottom_index: u16 = sorted_syms
                         .binary_search(&bottom_symbol)
                         .map_err(|_| {
-                            format!("Bottom symbol {:?} not found in FST symbol list", bottom_symbol)
+                            format!(
+                                "Bottom symbol {:?} not found in FST symbol list",
+                                bottom_symbol
+                            )
                         })
                         .and_then(|x| {
                             x.try_into().map_err(|x| {
@@ -2305,50 +2327,48 @@ impl FST {
 
     fn _split_to_symbols(&self, text: &str, allow_unknown: bool) -> Option<Vec<Symbol>> {
         let mut result = vec![];
-        let max_len = self.symbols.iter().filter(|x| match x {
-            Symbol::String(_) => true,
-            Symbol::Special(_) => true,
-            Symbol::Flag(_) => true,
-            _ => false
-        }).map(|x| x.with_symbol(|s| s.chars().count())).next().unwrap_or(0);
+        let max_byte_len = self
+            .symbols
+            .iter()
+            .filter(|x| match x {
+                Symbol::String(_) => true,
+                Symbol::Special(_) => true,
+                Symbol::Flag(_) => true,
+                _ => false,
+            })
+            .map(|x| x.with_symbol(|s| s.len()))
+            .next()
+            .unwrap_or(0);
         let mut slice = text;
-        let mut len_left = slice.len(); // Actually want bytes here!
-        while len_left > 0 {
+        while !slice.is_empty() {
             let mut found = false;
-            'outer: for length in (0..std::cmp::min(max_len, len_left)+1).rev() {
+            'outer: for length in (0..std::cmp::min(max_byte_len, slice.len()) + 1).rev() {
                 if !slice.is_char_boundary(length) {
-                    continue
+                    continue;
                 }
                 let key = &slice[..length];
-                let pp = self.symbols.partition_point(|x| x.with_symbol(|y| (key.chars().count(), y) < (y.chars().count(), key)));
+                let pp = self.symbols.partition_point(|x| {
+                    x.with_symbol(|y| (key.chars().count(), y) < (y.chars().count(), key))
+                });
                 for sym in self.symbols[pp..].iter().filter(|x| match x {
                     Symbol::String(_) => true,
                     Symbol::Special(_) => true,
                     Symbol::Flag(_) => true,
-                    _ => false
+                    _ => false,
                 }) {
                     if sym.with_symbol(|s| s != key) {
                         break;
                     }
-                    if match sym {
-                        Symbol::String(_) => true,
-                        Symbol::Special(_) => true,
-                        Symbol::Flag(_) => true,
-                        _ => false
-                    } {
-                        result.push(sym.clone());
-                        slice = &slice[length..];
-                        len_left -= length;
-                        found = true;
-                        break 'outer;
-                    }
+                    result.push(sym.clone());
+                    slice = &slice[length..];
+                    found = true;
+                    break 'outer;
                 }
             }
             if (!found) && allow_unknown {
                 let char = slice.chars().next().unwrap();
                 slice = &slice[char.len_utf8()..];
                 result.push(Symbol::String(StringSymbol::new(char.to_string(), false)));
-                len_left -= char.len_utf8();
                 found = true;
             }
             if !found {
@@ -3340,6 +3360,25 @@ fn test_raw_symbols() {
         .count(),
         0
     );
+}
+
+#[test]
+fn test_string_comparison_order_for_tokenizable_symbol_types() {
+    assert!(StringSymbol::new("aa".to_string(), false) < StringSymbol::new("a".to_string(), false));
+    assert!(StringSymbol::new("aa".to_string(), true) > StringSymbol::new("aa".to_string(), false));
+    assert!(
+        StringSymbol::new("ab".to_string(), false) > StringSymbol::new("aa".to_string(), false)
+    );
+
+    assert!(
+        FlagDiacriticSymbol::parse("@U.aa@").unwrap()
+            < FlagDiacriticSymbol::parse("@U.a@").unwrap()
+    );
+    assert!(
+        FlagDiacriticSymbol::parse("@U.ab@").unwrap()
+            > FlagDiacriticSymbol::parse("@U.aa@").unwrap()
+    );
+    assert!(SpecialSymbol::IDENTITY < SpecialSymbol::EPSILON); // "@0@" is the shorter string
 }
 
 /// A Python module implemented in Rust.
