@@ -3,7 +3,7 @@
 PyPykko is a wrapper around [pykko](https://github.com/pkauppin/pykko). It provides the basic analysis and generation API in an easily installable package.
 PyPykko can be installed without compiling anything (as the transducers are pre-compiled) or pulling in any native dependencies (such as hfst).
 
-This package contains (slightly modified for kfst compatibility versions of) all the files in the tools directory of pykko as well as constants.py and file_tools.py from the scripts directory and utils.py from the scripts directory as scriptutils.py. It also provides the novel reinflect.py.
+This package contains (slightly modified for kfst compatibility versions of) all the files in the tools directory of pykko as well as constants.py and file\_tools.py from the scripts directory and utils.py from the scripts directory as scriptutils.py. It also provides the novel reinflect.py and extras.py.
 
 ## Installation
 
@@ -15,7 +15,7 @@ pip install pypykko
 
 ## Usage
 
-There are two main Python methods `utils.analyze` and `generate.generate_wordform` inherited from Pykko proper; besides these there is `reinflect.reinflect` that is perhaps a more suitable interface for general reinflection.
+There are two main Python methods `utils.analyze` and `generate.generate_wordform` inherited from Pykko proper; besides these there is `reinflect.reinflect` that is perhaps a more suitable interface for general reinflection. There is also bolted-on alignment support in `extras.analyze_with_compound_parts`.
 
 ### reinflect.reinflect
 
@@ -42,7 +42,9 @@ There are two main Python methods `utils.analyze` and `generate.generate_wordfor
 ```
 
 
-### utils.analyze
+### utils.analyze and extras.analyze\_with\_compound\_parts
+
+`utils.analyze` should be used in most cases:
 
 ```py
 >>> from pypykko.utils import analyze
@@ -75,9 +77,18 @@ In cases where the homonym is different in different interpretations, we get ann
 ```
 7. Morphological tags that name the inflectional form.
 
-### generate.generate_wordform
+`extras.analyze\_with\_compound\_parts` is of use when it is useful to know the exact inflected forms of the compound parts of a word.
+Eg. when looking at "isonvarpaan", one might want to not only know that it is the compound of "iso" and "varvas" but also that they are in the forms "ison" and "varpaan".
+`extras.anlyze\_with\_compound\_parts` returns the character ranges matching compound parts.
 
-`generate_wordform` is a simple-to-use api to inflect in-lexicon words.
+```
+>>> analyze_with_compound_parts("isonvarpaan")
+('isonvarpaan', 'Lexicon', 'iso|varvas', 'noun', '', '', '+sg+gen', 0.0, (range(0, 4), range(4, 11)))
+```
+
+### generate.generate\_wordform
+
+`generate\_wordform` is a simple-to-use api to inflect in-lexicon words.
 
 ```py
 >>> from pypykko.generate import generate_wordform
