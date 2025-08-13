@@ -721,8 +721,8 @@ impl FlagDiacriticSymbol {
     fn _from_symbol_string(symbol: &str) -> KFSTResult<Self> {
         match FlagDiacriticSymbol::parse(symbol) {
             Ok(("", symbol)) => KFSTResult::Ok(symbol),
-            Ok((rest, _)) => value_error(format!("String {:?} contains a valid FlagDiacriticSymbol, but it has unparseable text at the end: {:?}", symbol, rest)),
-            _ => value_error(format!("Not a valid FlagDiacriticSymbol: {:?}", symbol))
+            Ok((rest, _)) => value_error(format!("String {symbol:?} contains a valid FlagDiacriticSymbol, but it has unparseable text at the end: {rest:?}")),
+            _ => value_error(format!("Not a valid FlagDiacriticSymbol: {symbol:?}"))
         }
     }
 
@@ -737,8 +737,7 @@ impl FlagDiacriticSymbol {
         let flag_type = match FlagDiacriticType::from_str(&flag_type) {
             Some(x) => x,
             None => value_error(format!(
-                "String {:?} is not a valid FlagDiacriticType specifier",
-                flag_type
+                "String {flag_type:?} is not a valid FlagDiacriticType specifier"
             ))?,
         };
         Ok(FlagDiacriticSymbol {
@@ -914,7 +913,7 @@ impl SpecialSymbol {
     fn _from_symbol_string(symbol: &str) -> KFSTResult<Self> {
         match SpecialSymbol::parse(symbol) {
             Ok(("", result)) => KFSTResult::Ok(result),
-            _ => value_error(format!("Not a valid SpecialSymbol: {:?}", symbol)),
+            _ => value_error(format!("Not a valid SpecialSymbol: {symbol:?}")),
         }
     }
 
@@ -1023,13 +1022,13 @@ impl SpecialSymbol {
 
 impl std::fmt::Debug for SpecialSymbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.with_symbol(|symbol| write!(f, "{}", symbol))
+        self.with_symbol(|symbol| write!(f, "{symbol}"))
     }
 }
 
 impl std::fmt::Debug for StringSymbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.with_symbol(|symbol| write!(f, "{}", symbol))
+        self.with_symbol(|symbol| write!(f, "{symbol}"))
     }
 }
 
@@ -1107,19 +1106,15 @@ impl Ord for Symbol {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // 1. Is the input made up of tokenizable symbols only?
 
-        let self_is_tokenizable = match self {
-            Symbol::Special(_) => true,
-            Symbol::Flag(_) => true,
-            Symbol::String(_) => true,
-            _ => false,
-        };
+        let self_is_tokenizable = matches!(
+            self,
+            Symbol::Special(_) | Symbol::Flag(_) | Symbol::String(_)
+        );
 
-        let other_is_tokenizable = match other {
-            Symbol::Special(_) => true,
-            Symbol::Flag(_) => true,
-            Symbol::String(_) => true,
-            _ => false,
-        };
+        let other_is_tokenizable = matches!(
+            other,
+            Symbol::Special(_) | Symbol::Flag(_) | Symbol::String(_)
+        );
 
         match (self_is_tokenizable, other_is_tokenizable) {
             // If both are tokenizable...
@@ -1134,21 +1129,21 @@ impl Ord for Symbol {
                     })
                 });
                 if result != Ordering::Equal {
-                    return result;
+                    result
                 } else {
                     match (self, other) {
                         // Do the types induce and ordering ("tertiarily")
-                        (Symbol::Special(_), Symbol::Flag(_)) => return Ordering::Greater,
-                        (Symbol::Special(_), Symbol::String(_)) => return Ordering::Less,
-                        (Symbol::Flag(_), Symbol::Special(_)) => return Ordering::Less,
-                        (Symbol::Flag(_), Symbol::String(_)) => return Ordering::Less,
-                        (Symbol::String(_), Symbol::Special(_)) => return Ordering::Greater,
-                        (Symbol::String(_), Symbol::Flag(_)) => return Ordering::Greater,
+                        (Symbol::Special(_), Symbol::Flag(_)) => Ordering::Greater,
+                        (Symbol::Special(_), Symbol::String(_)) => Ordering::Less,
+                        (Symbol::Flag(_), Symbol::Special(_)) => Ordering::Less,
+                        (Symbol::Flag(_), Symbol::String(_)) => Ordering::Less,
+                        (Symbol::String(_), Symbol::Special(_)) => Ordering::Greater,
+                        (Symbol::String(_), Symbol::Flag(_)) => Ordering::Greater,
 
                         // Do we have two values of the same type => type-internal ordering holds
-                        (Symbol::Special(a), Symbol::Special(b)) => return a.cmp(b),
-                        (Symbol::Flag(a), Symbol::Flag(b)) => return a.cmp(b),
-                        (Symbol::String(a), Symbol::String(b)) => return a.cmp(b),
+                        (Symbol::Special(a), Symbol::Special(b)) => a.cmp(b),
+                        (Symbol::Flag(a), Symbol::Flag(b)) => a.cmp(b),
+                        (Symbol::String(a), Symbol::String(b)) => a.cmp(b),
 
                         _ => unreachable!(),
                     }
@@ -1162,7 +1157,7 @@ impl Ord for Symbol {
                         Python::with_gil(|py| {
                             // Strictly less than
 
-                            if (left
+                            if left
                                 .value
                                 .getattr(py, "__lt__")
                                 .unwrap_or_else(|_| {
@@ -1181,14 +1176,14 @@ impl Ord for Symbol {
                                 .extract::<bool>(py)
                                 .unwrap_or_else(|_| {
                                     panic!("__lt__ on symbol {} didn't return a bool.", left.value)
-                                }))
+                                })
                             {
                                 return Ordering::Less;
                             }
 
                             // Strictly equal
 
-                            if (left
+                            if left
                                 .value
                                 .getattr(py, "__eq__")
                                 .unwrap_or_else(|_| {
@@ -1207,14 +1202,14 @@ impl Ord for Symbol {
                                 .extract::<bool>(py)
                                 .unwrap_or_else(|_| {
                                     panic!("__eq__ on symbol {} didn't return a bool.", left.value)
-                                }))
+                                })
                             {
                                 return Ordering::Equal;
                             }
 
                             // Otherwise must be greater
 
-                            return Ordering::Greater;
+                            Ordering::Greater
                         })
                     }
                     #[cfg(feature = "python")]
@@ -1222,7 +1217,7 @@ impl Ord for Symbol {
                         Python::with_gil(|py| {
                             // Strictly less than
 
-                            if (right
+                            if right
                                 .value
                                 .getattr(py, "__lt__")
                                 .unwrap_or_else(|_| {
@@ -1241,14 +1236,14 @@ impl Ord for Symbol {
                                 .extract::<bool>(py)
                                 .unwrap_or_else(|_| {
                                     panic!("__lt__ on symbol {} didn't return a bool.", right.value)
-                                }))
+                                })
                             {
                                 return Ordering::Greater;
                             }
 
                             // Strictly equal
 
-                            if (right
+                            if right
                                 .value
                                 .getattr(py, "__eq__")
                                 .unwrap_or_else(|_| {
@@ -1267,23 +1262,23 @@ impl Ord for Symbol {
                                 .extract::<bool>(py)
                                 .unwrap_or_else(|_| {
                                     panic!("__eq__ on symbol {} didn't return a bool.", right.value)
-                                }))
+                                })
                             {
                                 return Ordering::Equal;
                             }
 
                             // Otherwise must be greater
 
-                            return Ordering::Less;
+                            Ordering::Less
                         })
                     }
 
                     // Do we have two raw symbols?
-                    (Symbol::Raw(a), Symbol::Raw(b)) => return a.cmp(b),
+                    (Symbol::Raw(a), Symbol::Raw(b)) => a.cmp(b),
 
                     // Raw symbols are lesser
-                    (Symbol::Raw(_), _) => return Ordering::Less,
-                    (_, Symbol::Raw(_)) => return Ordering::Greater,
+                    (Symbol::Raw(_), _) => Ordering::Less,
+                    (_, Symbol::Raw(_)) => Ordering::Greater,
 
                     _ => unreachable!(),
                 }
@@ -1568,10 +1563,10 @@ impl FSTState {
         input_indices: Vec<usize>,
     ) -> Self {
         FSTState {
-            state_num: state_num,
+            state_num,
             path_weight,
-            input_flags: input_flags,
-            output_flags: output_flags,
+            input_flags,
+            output_flags,
             input_indices,
             output_symbols,
         }
@@ -1889,15 +1884,14 @@ impl FST {
             .into_iter()
             .map(|x| std::str::from_utf8(x))
             .collect::<Result<Vec<&str>, _>>()
-            .map_err(|x| format!("Some symbol was not valid utf-8: {}", x))?;
+            .map_err(|x| format!("Some symbol was not valid utf-8: {x}"))?;
         let symbol_list: Vec<Symbol> = symbol_strings
             .iter()
             .map(|x| {
                 Symbol::parse(x)
                     .map_err(|x| {
                         format!(
-                            "Some symbol while valid utf8 was not a valid symbol specifier: {}",
-                            x
+                            "Some symbol while valid utf8 was not a valid symbol specifier: {x}"
                         )
                     })
                     .and_then(|(extra, sym)| {
@@ -1905,9 +1899,8 @@ impl FST {
                             Ok(sym)
                         } else {
                             Err(format!(
-                                "Extra data after end of symbol {}: {:?}",
+                                "Extra data after end of symbol {}: {extra:?}",
                                 sym.get_symbol(),
-                                extra
                             ))
                         }
                     })
@@ -2021,14 +2014,14 @@ impl FST {
             .symbols
             .len()
             .try_into()
-            .map_err(|x| format!("Too many symbols to represent as u16: {}", x))?;
+            .map_err(|x| format!("Too many symbols to represent as u16: {x}"))?;
         result.extend(symbol_len.to_be_bytes());
         result.extend(transitions.to_be_bytes());
         let num_states: u32 = self
             .final_states
             .len()
             .try_into()
-            .map_err(|x| format!("Too many final states to represent as u32: {}", x))?;
+            .map_err(|x| format!("Too many final states to represent as u32: {x}"))?;
         result.extend(num_states.to_be_bytes());
         result.push(weighted.into()); // Promises 0 for false and 1 for true
 
@@ -2051,38 +2044,29 @@ impl FST {
             for (top_symbol, transition) in transition_table.iter() {
                 for (target_state, bottom_symbol, weight) in transition.iter() {
                     let source_state: u32 = (*source_state).try_into().map_err(|x| {
-                        format!(
-                            "Can't represent source state {} as u32: {}",
-                            source_state, x
-                        )
+                        format!("Can't represent source state {source_state} as u32: {x}")
                     })?;
                     let target_state: u32 = (*target_state).try_into().map_err(|x| {
-                        format!(
-                            "Can't represent target state {} as u32: {}",
-                            target_state, x
-                        )
+                        format!("Can't represent target state {target_state} as u32: {x}")
                     })?;
                     let top_index: u16 = sorted_syms
                         .binary_search(&top_symbol)
                         .map_err(|_| {
-                            format!("Top symbol {:?} not found in FST symbol list", top_symbol)
+                            format!("Top symbol {top_symbol:?} not found in FST symbol list")
                         })
                         .and_then(|x| {
                             x.try_into().map_err(|x| {
-                                format!("Can't represent top symbol index as u16: {}", x)
+                                format!("Can't represent top symbol index as u16: {x}")
                             })
                         })?;
                     let bottom_index: u16 = sorted_syms
                         .binary_search(&bottom_symbol)
                         .map_err(|_| {
-                            format!(
-                                "Bottom symbol {:?} not found in FST symbol list",
-                                bottom_symbol
-                            )
+                            format!("Bottom symbol {bottom_symbol:?} not found in FST symbol list")
                         })
                         .and_then(|x| {
                             x.try_into().map_err(|x| {
-                                format!("Can't represent bottom symbol index as u16: {}", x)
+                                format!("Can't represent bottom symbol index as u16: {x}")
                             })
                         })?;
                     to_compress.extend(source_state.to_be_bytes());
@@ -2103,7 +2087,7 @@ impl FST {
         for (&final_state, weight) in self.final_states.iter() {
             let final_state: u32 = final_state
                 .try_into()
-                .map_err(|x| format!("Can't represent final state index as u32: {}", x))?;
+                .map_err(|x| format!("Can't represent final state index as u32: {x}"))?;
             to_compress.extend(final_state.to_be_bytes());
             if weighted {
                 to_compress.extend(weight.to_be_bytes());
@@ -2119,7 +2103,7 @@ impl FST {
         let mut encoder = XzEncoder::new(to_compress.as_slice(), 9);
         encoder
             .read_to_end(&mut compressed)
-            .map_err(|x| format!("Failed while compressing with lzma_rs: {}", x))?;
+            .map_err(|x| format!("Failed while compressing with lzma_rs: {x}"))?;
         result.extend(compressed);
 
         Ok(result)
@@ -2160,12 +2144,12 @@ impl FST {
             Ok(mut file) => {
                 let mut att_code = String::new();
                 file.read_to_string(&mut att_code).map_err(|err| {
-                    io_error::<()>(format!("Failed to read from file {}:\n{}", att_file, err))
+                    io_error::<()>(format!("Failed to read from file {att_file}:\n{err}"))
                         .unwrap_err()
                 })?;
                 FST::from_att_code(att_code, debug)
             }
-            Err(err) => io_error(format!("Failed to open file {}:\n{}", att_file, err)),
+            Err(err) => io_error(format!("Failed to open file {att_file}:\n{err}")),
         }
     }
 
@@ -2194,8 +2178,7 @@ impl FST {
                     }
                     _ => {
                         return value_error(format!(
-                            "Failed to parse att code on line {}:\n{}",
-                            lineno, line
+                            "Failed to parse att code on line {lineno}:\n{line}",
                         ))
                     }
                 }
@@ -2223,8 +2206,7 @@ impl FST {
                     }
                     _ => {
                         return value_error(format!(
-                            "Failed to parse att code on line {}:\n{}",
-                            lineno, line
+                            "Failed to parse att code on line {lineno}:\n{line}",
                         ));
                     }
                 }
@@ -2306,12 +2288,12 @@ impl FST {
             Ok(mut file) => {
                 let mut kfst_bytes: Vec<u8> = vec![];
                 file.read_to_end(&mut kfst_bytes).map_err(|err| {
-                    io_error::<()>(format!("Failed to read from file {}:\n{}", kfst_file, err))
+                    io_error::<()>(format!("Failed to read from file {kfst_file}:\n{err}"))
                         .unwrap_err()
                 })?;
                 FST::from_kfst_bytes(&kfst_bytes, debug)
             }
-            Err(err) => io_error(format!("Failed to open file {}:\n{}", kfst_file, err)),
+            Err(err) => io_error(format!("Failed to open file {kfst_file}:\n{err}")),
         }
     }
 
@@ -2344,19 +2326,13 @@ impl FST {
         let max_byte_len = self
             .symbols
             .iter()
-            .filter(|x| match x {
-                Symbol::String(_) => true,
-                Symbol::Special(_) => true,
-                Symbol::Flag(_) => true,
-                _ => false,
-            })
+            .find(|x| matches!(x, Symbol::String(_) | Symbol::Special(_) | Symbol::Flag(_)))
             .map(|x| x.with_symbol(|s| s.len()))
-            .next()
             .unwrap_or(0);
         let mut slice = text;
         while !slice.is_empty() {
             let mut found = false;
-            'outer: for length in (0..std::cmp::min(max_byte_len, slice.len()) + 1).rev() {
+            for length in (0..std::cmp::min(max_byte_len, slice.len()) + 1).rev() {
                 if !slice.is_char_boundary(length) {
                     continue;
                 }
@@ -2364,19 +2340,16 @@ impl FST {
                 let pp = self.symbols.partition_point(|x| {
                     x.with_symbol(|y| (key.chars().count(), y) < (y.chars().count(), key))
                 });
-                for sym in self.symbols[pp..].iter().filter(|x| match x {
-                    Symbol::String(_) => true,
-                    Symbol::Special(_) => true,
-                    Symbol::Flag(_) => true,
-                    _ => false,
-                }) {
-                    if sym.with_symbol(|s| s != key) {
+                if let Some(sym) = self.symbols[pp..]
+                    .iter()
+                    .find(|x| matches!(x, Symbol::String(_) | Symbol::Special(_) | Symbol::Flag(_)))
+                {
+                    if sym.with_symbol(|s| s == key) {
+                        result.push(sym.clone());
+                        slice = &slice[length..];
+                        found = true;
                         break;
                     }
-                    result.push(sym.clone());
-                    slice = &slice[length..];
-                    found = true;
-                    break 'outer;
                 }
             }
             if (!found) && allow_unknown {
@@ -2450,9 +2423,7 @@ impl FST {
     ) -> KFSTResult<Vec<(String, f64)>> {
         let input_symbols = self.split_to_symbols(input, allow_unknown);
         match input_symbols {
-            None => {
-                tokenization_exception(format!("Input cannot be split into symbols: {}", input))
-            }
+            None => tokenization_exception(format!("Input cannot be split into symbols: {input}")),
             Some(input_symbols) => {
                 let mut dedup: IndexSet<String> = IndexSet::new();
                 let mut result: Vec<(String, f64)> = vec![];
@@ -2491,9 +2462,7 @@ impl FST {
     ) -> KFSTResult<Vec<(Vec<(usize, Symbol)>, f64)>> {
         let input_symbols = self.split_to_symbols(input, allow_unknown);
         match input_symbols {
-            None => {
-                tokenization_exception(format!("Input cannot be split into symbols: {}", input))
-            }
+            None => tokenization_exception(format!("Input cannot be split into symbols: {input}")),
             Some(input_symbols) => {
                 let mut dedup: IndexSet<Vec<(usize, Symbol)>> = IndexSet::new();
                 let mut result: Vec<(Vec<(usize, Symbol)>, f64)> = vec![];
@@ -2738,7 +2707,7 @@ impl FST {
     pub fn to_att_file(&self, py: Python<'_>, att_file: PyObject) -> KFSTResult<()> {
         let path: String = att_file.call_method0(py, "__str__")?.extract(py)?;
         fs::write(Path::new(&path), self.to_att_code()).map_err(|err| {
-            io_error::<()>(format!("Failed to write to file {}:\n{}", path, err)).unwrap_err()
+            io_error::<()>(format!("Failed to write to file {path}:\n{err}")).unwrap_err()
         })
     }
 
@@ -2746,7 +2715,7 @@ impl FST {
     #[cfg(not(feature = "python"))]
     pub fn to_att_file(&self, att_file: String) -> KFSTResult<()> {
         fs::write(Path::new(&att_file), self.to_att_code()).map_err(|err| {
-            io_error::<()>(format!("Failed to write to file {}:\n{}", att_file, err)).unwrap_err()
+            io_error::<()>(format!("Failed to write to file {att_file}:\n{err}")).unwrap_err()
         })
     }
 
@@ -2777,10 +2746,10 @@ impl FST {
         for (state, weight) in self.final_states.iter() {
             match weight {
                 0.0 => {
-                    rows.push(format!("{}", state));
+                    rows.push(format!("{state}"));
                 }
                 _ => {
-                    rows.push(format!("{}\t{}", state, weight));
+                    rows.push(format!("{state}\t{weight}"));
                 }
             }
         }
@@ -2833,7 +2802,7 @@ impl FST {
         let bytes = self.to_kfst_bytes()?;
         let path: String = kfst_file.call_method0(py, "__str__")?.extract(py)?;
         fs::write(Path::new(&path), bytes).map_err(|err| {
-            io_error::<()>(format!("Failed to write to file {}:\n{}", path, err)).unwrap_err()
+            io_error::<()>(format!("Failed to write to file {path}:\n{err}")).unwrap_err()
         })
     }
 
@@ -2842,7 +2811,7 @@ impl FST {
     pub fn to_kfst_file(&self, kfst_file: String) -> KFSTResult<()> {
         let bytes = self.to_kfst_bytes()?;
         fs::write(Path::new(&kfst_file), bytes).map_err(|err| {
-            io_error::<()>(format!("Failed to write to file {}:\n{}", kfst_file, err)).unwrap_err()
+            io_error::<()>(format!("Failed to write to file {kfst_file}:\n{err}")).unwrap_err()
         })
     }
 
@@ -2931,7 +2900,7 @@ impl FST {
         self.rules
             .get(&state.state_num)
             .map(|x| x.keys().cloned().collect())
-            .unwrap_or_else(|| HashSet::new())
+            .unwrap_or_default()
     }
 }
 
