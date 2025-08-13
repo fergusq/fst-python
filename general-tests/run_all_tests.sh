@@ -18,6 +18,7 @@ python import_test.py
 python test_pypykko.py
 python symbol_test.py
 python test_alignment_pypykko.py
+python test_pypykko_components.py
 
 pip uninstall kfst-rs -y
 
@@ -26,3 +27,4 @@ python import_test.py
 python test_pypykko.py
 python symbol_test.py
 python test_alignment_pypykko.py
+python test_pypykko_components.py
