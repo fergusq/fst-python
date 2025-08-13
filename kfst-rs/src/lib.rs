@@ -1411,10 +1411,9 @@ pub struct FlagMap(pub im::HashMap<u32, (bool, u32)>);
 #[cfg(feature = "python")]
 impl FromPyObject<'_> for FlagMap {
     fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let as_index_map: std::collections::HashMap<String, (bool, String)> = ob.extract()?;
-        let as_map: im::HashMap<_, _> = as_index_map
-            .into_iter()
-            .map(|(key, value)| (intern(key), (value.0, intern(value.1))))
+        let as_map: im::HashMap<_, _> = ob.getattr("items")?.call0()?.try_iter()?
+            .map(|x| x.unwrap().extract().unwrap() )
+            .map(|(key, value): (String, (bool, String))| (intern(key), (value.0, intern(value.1))))
             .collect();
         Ok(FlagMap(as_map))
     }
@@ -1504,8 +1503,8 @@ impl FSTState {
     fn __new(
         state: u64,
         path_weight: f64,
-        input_flags: IndexMap<String, (bool, String)>,
-        output_flags: IndexMap<String, (bool, String)>,
+        input_flags: im::HashMap<String, (bool, String)>,
+        output_flags: im::HashMap<String, (bool, String)>,
         output_symbols: Vec<Symbol>,
         input_indices: Vec<usize>,
     ) -> Self {
@@ -1534,15 +1533,15 @@ impl FSTState {
     /// These are not a [FlagMap] but and IndexMap of (name -> (direction of setting where true is positively set, value))
     /// where name and value get interned.
     pub fn new(
-        state: u64,
+        state_num: u64,
         path_weight: f64,
-        input_flags: IndexMap<String, (bool, String)>,
-        output_flags: IndexMap<String, (bool, String)>,
-        input_indices: Vec<usize>,
+        input_flags: im::HashMap<String, (bool, String)>,
+        output_flags: im::HashMap<String, (bool, String)>,
         output_symbols: Vec<Symbol>,
+        input_indices: Vec<usize>,
     ) -> Self {
         FSTState::__new(
-            state,
+            state_num,
             path_weight,
             input_flags,
             output_flags,
@@ -1556,23 +1555,24 @@ impl FSTState {
 impl FSTState {
     #[cfg(feature = "python")]
     #[new]
-    #[pyo3(signature = (state, path_weight=0.0, input_flags=IndexMap::new(), output_flags=IndexMap::new(), output_symbols=vec![], input_indices=vec![]))]
+    #[pyo3(signature = (state_num, path_weight=0.0, input_flags = FlagMap(im::HashMap::new()), output_flags = FlagMap(im::HashMap::new()), output_symbols=vec![], input_indices=vec![]))]
     fn new(
-        state: u64,
+        state_num: u64,
         path_weight: f64,
-        input_flags: IndexMap<String, (bool, String)>,
-        output_flags: IndexMap<String, (bool, String)>,
+        input_flags: FlagMap,
+        output_flags: FlagMap,
         output_symbols: Vec<Symbol>,
         input_indices: Vec<usize>,
     ) -> Self {
-        FSTState::__new(
-            state,
+        FSTState {
+            state_num: state_num,
             path_weight,
-            input_flags,
-            output_flags,
-            output_symbols,
+            input_flags: input_flags,
+            output_flags: output_flags,
             input_indices,
-        )
+            output_symbols,
+        }
+
     }
 
     #[deprecated]
@@ -2892,13 +2892,13 @@ impl FST {
     /// ```
     /// use kfst_rs::{FST, Symbol, FSTState};
     /// use std::collections::HashSet;
-    /// use indexmap::IndexMap;
+    /// use im::HashMap;
     ///
     /// let fst = FST::from_att_code("0\t1\ta\tb\n".to_string(), false).unwrap();
     /// let mut expected = HashSet::new();
     /// expected.insert(Symbol::parse("a").unwrap().1);
-    /// assert_eq!(fst.get_input_symbols(FSTState::new(0, 0.0, IndexMap::new(), IndexMap::new(), vec![], vec![])), expected);
-    /// assert_eq!(fst.get_input_symbols(FSTState::new(1, 0.0, IndexMap::new(), IndexMap::new(), vec![], vec![])), HashSet::new());
+    /// assert_eq!(fst.get_input_symbols(FSTState::new(0, 0.0, im::HashMap::new(), im::HashMap::new(), vec![], vec![])), expected);
+    /// assert_eq!(fst.get_input_symbols(FSTState::new(1, 0.0, im::HashMap::new(), im::HashMap::new(), vec![], vec![])), HashSet::new());
     /// ```
     pub fn get_input_symbols(&self, state: FSTState) -> HashSet<Symbol> {
         self.rules
