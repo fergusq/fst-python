@@ -34,11 +34,11 @@ class FSTState(NamedTuple):
     path_weight: float = 0
     input_flags: Map[str, tuple[bool, str]] = Map()
     output_flags: Map[str, tuple[bool, str]] = Map()
-    input_indices: tuple[int, ...] = tuple()
     output_symbols: tuple[Symbol, ...] = tuple()
+    input_indices: tuple[int, ...] = tuple()
 
     def __repr__(self):
-        return f"FSTState({self.state_num}, {self.path_weight}, {self.input_flags}, {self.output_flags}, {self.input_indices}, {self.output_symbols})"
+        return f"FSTState({self.state_num}, {self.path_weight}, {self.input_flags}, {self.output_flags}, {self.output_symbols}, {self.input_indices})"
 
 
 class FST(NamedTuple):
@@ -182,11 +182,14 @@ class FST(NamedTuple):
         
         return ans
 
-    def run_fst(self, input_symbols: list[Symbol], state=FSTState(0), post_input_advance=False, input_symbol_index: int = 0) -> Generator[tuple[bool, bool, FSTState], None, None]:
+    def run_fst(self, input_symbols: list[Symbol], state=FSTState(0), post_input_advance=False, input_symbol_index: int | None = None) -> Generator[tuple[bool, bool, FSTState], None, None]:
         """
         Runs the FST on the given input symbols, starting from the given state (by default 0).
         Yields an (bool, FSTState) tuple for each path. If the path ended in a final state, the bool will be True, otherwise False.
         """
+
+        # This is None-able for the sake of making it optional on the rust-side
+        input_symbol_index = 0 if input_symbol_index is None else input_symbol_index
         transitions = self.rules.get(state.state_num, {})
         if len(input_symbols) - input_symbol_index == 0:
             yield state.state_num in self.final_states, post_input_advance, state._replace(path_weight=state.path_weight + self.final_states.get(state.state_num, 0))
@@ -208,7 +211,11 @@ class FST(NamedTuple):
             if SpecialSymbol.IDENTITY in transitions:
                 yield from self._transition(input_symbols, state, transitions[SpecialSymbol.IDENTITY], isymbol, SpecialSymbol.IDENTITY, input_symbol_index)
     
-    def _transition(self, input_symbols: list[Symbol], state: FSTState, transitions: list[tuple[int, Symbol, float]], isymbol: Symbol | None, transition_isymbol: Symbol, input_symbol_index: int = 0) -> Generator[tuple[bool, bool, FSTState], None, None]:
+    def _transition(self, input_symbols: list[Symbol], state: FSTState, transitions: list[tuple[int, Symbol, float]], isymbol: Symbol | None, transition_isymbol: Symbol, input_symbol_index: int | None = None) -> Generator[tuple[bool, bool, FSTState], None, None]:
+        
+        # This is None-able for the sake of making it optional on the rust-side
+        input_symbol_index = 0 if input_symbol_index is None else input_symbol_index
+        
         for next_state, osymbol, weight in transitions:
             if self.debug:
                 print(state.state_num, "->", next_state, transition_isymbol, osymbol, input_symbols, input_symbol_index, state)
