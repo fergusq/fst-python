@@ -1411,8 +1411,11 @@ pub struct FlagMap(pub im::HashMap<u32, (bool, u32)>);
 #[cfg(feature = "python")]
 impl FromPyObject<'_> for FlagMap {
     fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let as_map: im::HashMap<_, _> = ob.getattr("items")?.call0()?.try_iter()?
-            .map(|x| x.unwrap().extract().unwrap() )
+        let as_map: im::HashMap<_, _> = ob
+            .getattr("items")?
+            .call0()?
+            .try_iter()?
+            .map(|x| x.unwrap().extract().unwrap())
             .map(|(key, value): (String, (bool, String))| (intern(key), (value.0, intern(value.1))))
             .collect();
         Ok(FlagMap(as_map))
@@ -1572,7 +1575,6 @@ impl FSTState {
             input_indices,
             output_symbols,
         }
-
     }
 
     #[deprecated]
@@ -1761,7 +1763,7 @@ impl FST {
                         (Some(isymbol), Symbol::Special(SpecialSymbol::IDENTITY)) => {
                             new_output_symbols.push(isymbol.clone())
                         }
-                        _ => new_output_symbols.push(osymbol.clone())
+                        _ => new_output_symbols.push(osymbol.clone()),
                     };
                     let mut new_input_indices: Vec<usize> = state.input_indices.clone();
                     new_input_indices.push(input_symbol_index);
@@ -1774,9 +1776,21 @@ impl FST {
                         output_symbols: new_output_symbols,
                     };
                     if transition_isymbol.is_epsilon() {
-                        self._run_fst(input_symbols, &new_state, input_symbols.is_empty(), result, input_symbol_index);
+                        self._run_fst(
+                            input_symbols,
+                            &new_state,
+                            input_symbols.is_empty(),
+                            result,
+                            input_symbol_index,
+                        );
                     } else {
-                        self._run_fst(input_symbols, &new_state, false, result, input_symbol_index+1);
+                        self._run_fst(
+                            input_symbols,
+                            &new_state,
+                            false,
+                            result,
+                            input_symbol_index + 1,
+                        );
                     }
                 }
                 _ => continue,
@@ -2420,7 +2434,12 @@ impl FST {
         post_input_advance: bool,
         input_symbol_index: Option<usize>,
     ) -> Vec<(bool, bool, FSTState)> {
-        self.__run_fst(input_symbols, state, post_input_advance, input_symbol_index.unwrap_or(0))
+        self.__run_fst(
+            input_symbols,
+            state,
+            post_input_advance,
+            input_symbol_index.unwrap_or(0),
+        )
     }
 
     fn _lookup(
@@ -2486,7 +2505,12 @@ impl FST {
                 finished_paths
                     .sort_by(|a, b| a.2.path_weight.partial_cmp(&b.2.path_weight).unwrap());
                 for finished in finished_paths {
-                    let output_vec: Vec<(usize, Symbol)> = finished.2.input_indices.into_iter().zip(finished.2.output_symbols.into_iter()).collect();
+                    let output_vec: Vec<(usize, Symbol)> = finished
+                        .2
+                        .input_indices
+                        .into_iter()
+                        .zip(finished.2.output_symbols.into_iter())
+                        .collect();
                     if dedup.contains(&output_vec) {
                         continue;
                     }
@@ -2523,20 +2547,20 @@ impl FST {
     /// If tokenization fails, returns a [KFSTResult::Err] variant
     ///
     /// If you just want strings in and strings out, look at [FST::lookup]. If you need more control over tokenization (or if your symbols just can not be parsed from a string representation), [FST::run_fst] might be what you are looking for.
-    /// 
+    ///
     /// ```rust
     /// use kfst_rs::{FST, FSTState, Symbol, StringSymbol, SpecialSymbol};
-    /// 
+    ///
     /// // We load the pykko parser to parse an actual finnish word
-    /// 
+    ///
     /// let fst = FST::from_kfst_file("../pypykko/pypykko/fi-parser.kfst".to_string(), false).unwrap();
-    /// 
+    ///
     /// // We parse "isonvarpaan" which is the genitive form of "isovarvas".
     /// // It is the compound of "iso" and "varvas" and notably it inflects in both components:
     /// // (iso -> ison and varvas -> varpaan)
     /// // We wish to recover the information regarding what ranges in the original word the compound components match.
     /// // Thus we need lookup_aligned.
-    /// 
+    ///
     /// assert_eq!(
     ///   fst.lookup_aligned("isonvarpaan", FSTState::default(), false).unwrap()[0].0, // Discard secondary interpretations and weight
     ///   vec![
@@ -2544,36 +2568,36 @@ impl FST {
     ///        // If it doesn't increment for a row, the output symbol came from an epsilon transition
     ///        (0, Symbol::String(StringSymbol::new("Lexicon".to_string(), false))),
     ///        (0, Symbol::String(StringSymbol::new("\t".to_string(), false))),
-    /// 
+    ///
     ///        // Here we have a run of incrementing indices: i:i, s:s, o:o and n:@_EPSILON_SYMBOL_@.
-    /// 
+    ///
     ///        (0, Symbol::String(StringSymbol::new("i".to_string(), false))),
     ///        (1, Symbol::String(StringSymbol::new("s".to_string(), false))),
     ///        (2, Symbol::String(StringSymbol::new("o".to_string(), false))),
     ///        (3, Symbol::Special(SpecialSymbol::EPSILON)),
-    /// 
+    ///
     ///        // Here we have a row that isn't incremented after, ie. the separating pipe comes from
     ///        // @_EPSILON_SYMBOL_@:|
-    /// 
+    ///
     ///        (4, Symbol::String(StringSymbol::new("|".to_string(), false))),
-    /// 
-    ///        // Here on we increment v:v, a:a, r:r, p:v, a:a 
-    /// 
+    ///
+    ///        // Here on we increment v:v, a:a, r:r, p:v, a:a
+    ///
     ///        (4, Symbol::String(StringSymbol::new("v".to_string(), false))),
     ///        (5, Symbol::String(StringSymbol::new("a".to_string(), false))),
     ///        (6, Symbol::String(StringSymbol::new("r".to_string(), false))),
     ///        (7, Symbol::String(StringSymbol::new("v".to_string(), false))),
     ///        (8, Symbol::String(StringSymbol::new("a".to_string(), false))),
-    /// 
+    ///
     ///        // These two are somewhat surprising: @_EPSILON_SYMBOL_@:s and  a:@_EPSILON_SYMBOL_@
     ///        // Notably there is consonant gradation going on (varva -> varpa)
-    /// 
+    ///
     ///        (9, Symbol::String(StringSymbol::new("s".to_string(), false))),
     ///        (9, Symbol::Special(SpecialSymbol::EPSILON)),
-    /// 
+    ///
     ///        // We are out of the stem and in the genitive ending (-n)
     ///        // The final n is consumed by the +gen token
-    /// 
+    ///
     ///        (10, Symbol::String(StringSymbol::new("\tnoun\t".to_string(), false))),
     ///        (10, Symbol::String(StringSymbol::new("\t".to_string(), false))),
     ///        (10, Symbol::String(StringSymbol::new("\t".to_string(), false))),
@@ -2589,7 +2613,6 @@ impl FST {
     ) -> KFSTResult<Vec<(Vec<(usize, Symbol)>, f64)>> {
         self._lookup_aligned(input, state, allow_unknown)
     }
-
 }
 
 fn _update_flags(
@@ -2853,9 +2876,14 @@ impl FST {
         input_symbols: Vec<Symbol>,
         state: FSTState,
         post_input_advance: bool,
-        input_symbol_index: Option<usize>
+        input_symbol_index: Option<usize>,
     ) -> Vec<(bool, bool, FSTState)> {
-        self.__run_fst(input_symbols, state, post_input_advance, input_symbol_index.unwrap_or(0))
+        self.__run_fst(
+            input_symbols,
+            state,
+            post_input_advance,
+            input_symbol_index.unwrap_or(0),
+        )
     }
 
     #[cfg(feature = "python")]
@@ -2879,7 +2907,6 @@ impl FST {
     ) -> KFSTResult<Vec<(Vec<(usize, Symbol)>, f64)>> {
         self._lookup_aligned(input, state, allow_unknown)
     }
-
 
     #[deprecated]
     /// Equal to:
@@ -2911,13 +2938,19 @@ impl FST {
 #[test]
 fn test_att_trivial() {
     let fst = FST::from_att_code("1\n0\t1\ta\tb".to_string(), false).unwrap();
-    assert_eq!(fst.lookup("a", FSTState::default(), false).unwrap(), vec![("b".to_string(), 0.0)]);
+    assert_eq!(
+        fst.lookup("a", FSTState::default(), false).unwrap(),
+        vec![("b".to_string(), 0.0)]
+    );
 }
 
 #[test]
 fn test_att_slightly_less_trivial() {
     let fst = FST::from_att_code("2\n0\t1\ta\tb\n1\t2\tc\td".to_string(), false).unwrap();
-    assert_eq!(fst.lookup("ac", FSTState::default(), false).unwrap(), vec![("bd".to_string(), 0.0)]);
+    assert_eq!(
+        fst.lookup("ac", FSTState::default(), false).unwrap(),
+        vec![("bd".to_string(), 0.0)]
+    );
 }
 
 #[test]
@@ -3108,7 +3141,7 @@ fn test_kfst_voikko_lentää_correct_states() {
     for i in 0..=input_symbols.len() {
         let subsequence = &input_symbols[..i];
         let mut states: Vec<_> = fst
-            .run_fst(subsequence.to_vec(), FSTState::_new(0), false , None)
+            .run_fst(subsequence.to_vec(), FSTState::_new(0), false, None)
             .into_iter()
             .map(|(_, _, x)| x.state_num)
             .collect();
@@ -3395,7 +3428,7 @@ fn test_raw_symbols() {
         ],
         FSTState::_new(0),
         false,
-        None
+        None,
     );
     let filtered: Vec<_> = result.into_iter().filter(|x| x.0).collect();
     assert_eq!(filtered.len(), 1);
