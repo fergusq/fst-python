@@ -76,6 +76,7 @@ use std::fs::{self, File};
 use std::hash::Hash;
 use std::io::Read;
 use std::path::Path;
+use std::rc::Rc;
 
 use im::HashMap;
 use indexmap::{indexmap, IndexMap, IndexSet};
@@ -1435,6 +1436,12 @@ impl<'py> IntoPyObject<'py> for FlagMap {
 
 // transducer.py
 
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+enum FSTLinkedList {
+    Some(usize, Rc<FSTLinkedList>),
+    None
+}
+
 #[cfg_attr(feature = "python", pyclass(frozen, eq, hash, get_all))]
 #[derive(Clone, Debug, PartialEq)]
 #[readonly::make]
@@ -1454,7 +1461,7 @@ pub struct FSTState {
     /// Output side symbols for the transduction so far.
     pub output_symbols: Vec<Symbol>,
     /// Output side symbols for the transduction so far.
-    pub input_indices: Vec<usize>,
+    pub input_indices: FSTLinkedList,
 }
 
 impl Default for FSTState {
@@ -1465,7 +1472,7 @@ impl Default for FSTState {
             path_weight: 0.0,
             input_flags: FlagMap(im::HashMap::new()),
             output_flags: FlagMap(im::HashMap::new()),
-            input_indices: vec![],
+            input_indices: FSTLinkedList::None,
             output_symbols: vec![],
         }
     }
@@ -1493,7 +1500,7 @@ impl FSTState {
             path_weight: 0.0,
             input_flags: FlagMap(im::HashMap::new()),
             output_flags: FlagMap(im::HashMap::new()),
-            input_indices: vec![],
+            input_indices: FSTLinkedList::None,
             output_symbols: vec![],
         }
     }
@@ -1506,6 +1513,11 @@ impl FSTState {
         output_symbols: Vec<Symbol>,
         input_indices: Vec<usize>,
     ) -> Self {
+        // Convert vec to input_indices
+        let mut input_index_list = FSTLinkedList::None;
+        for input_index in input_indices.into_iter() {
+            input_index_list = FSTLinkedList::Some(input_index, Rc::new(input_index_list));
+        }
         FSTState {
             state_num: state,
             path_weight,
@@ -1521,7 +1533,7 @@ impl FSTState {
                     .map(|(key, value)| (intern(key), (value.0, intern(value.1))))
                     .collect(),
             ),
-            input_indices,
+            input_indices: input_index_list,
             output_symbols,
         }
     }
@@ -1760,8 +1772,7 @@ impl FST {
                         }
                         _ => new_output_symbols.push(osymbol.clone()),
                     };
-                    let mut new_input_indices: Vec<usize> = state.input_indices.clone();
-                    new_input_indices.push(input_symbol_index);
+                    let new_input_indices: FSTLinkedList = FSTLinkedList::Some(input_symbol_index, Rc::new(state.input_indices.clone()));
                     let new_state = FSTState {
                         state_num: *next_state,
                         path_weight: state.path_weight + *weight,
@@ -2474,10 +2485,19 @@ impl FST {
                 finished_paths
                     .sort_by(|a, b| a.2.path_weight.partial_cmp(&b.2.path_weight).unwrap());
                 for finished in finished_paths {
-                    let output_vec: Vec<(usize, Symbol)> = finished
-                        .2
-                        .input_indices
-                        .into_iter()
+                    let mut output_idxs = vec![];
+                    let mut output_idx_state = &finished.2.input_indices;
+                    loop {
+                        match output_idx_state {
+                            FSTLinkedList::Some(value, list) => {
+                                output_idx_state = list;
+                                output_idxs.push(*value);
+                            },
+                            FSTLinkedList::None => break,
+                        }
+                    }
+                    
+                    let output_vec: Vec<(usize, Symbol)> = output_idxs.into_iter().rev()
                         .zip(finished.2.output_symbols.into_iter())
                         .collect();
                     if dedup.contains(&output_vec) {
@@ -3305,7 +3325,7 @@ fn test_simple_unknown() {
                 path_weight: 0.0,
                 input_flags: FlagMap(im::HashMap::new()),
                 output_flags: FlagMap(im::HashMap::new()),
-                input_indices: vec![0],
+                input_indices: FSTLinkedList::Some(0, Rc::new(FSTLinkedList::None)),
                 output_symbols: vec![Symbol::String(StringSymbol::new("y".to_string(), false))]
             }
         )]
@@ -3342,7 +3362,7 @@ fn test_simple_identity() {
                 path_weight: 0.0,
                 input_flags: FlagMap(im::HashMap::new()),
                 output_flags: FlagMap(im::HashMap::new()),
-                input_indices: vec![0],
+                input_indices: FSTLinkedList::Some(0, Rc::new(FSTLinkedList::None)),
                 output_symbols: vec![Symbol::String(StringSymbol::new("x".to_string(), true))]
             }
         )]
