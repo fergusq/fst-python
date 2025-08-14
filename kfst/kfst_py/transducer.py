@@ -182,7 +182,7 @@ class FST(NamedTuple):
         
         return ans
 
-    def run_fst(self, input_symbols: list[Symbol], state=FSTState(0), post_input_advance=False, input_symbol_index: int | None = None) -> Generator[tuple[bool, bool, FSTState], None, None]:
+    def run_fst(self, input_symbols: list[Symbol], state=FSTState(0), post_input_advance=False, input_symbol_index: int | None = None, keep_non_final: bool = True) -> Generator[tuple[bool, bool, FSTState], None, None]:
         """
         Runs the FST on the given input symbols, starting from the given state (by default 0).
         Yields an (bool, FSTState) tuple for each path. If the path ended in a final state, the bool will be True, otherwise False.
@@ -192,7 +192,8 @@ class FST(NamedTuple):
         input_symbol_index = 0 if input_symbol_index is None else input_symbol_index
         transitions = self.rules.get(state.state_num, {})
         if len(input_symbols) - input_symbol_index == 0:
-            yield state.state_num in self.final_states, post_input_advance, state._replace(path_weight=state.path_weight + self.final_states.get(state.state_num, 0))
+            if state.state_num in self.final_states or keep_non_final:
+                yield state.state_num in self.final_states, post_input_advance, state._replace(path_weight=state.path_weight + self.final_states.get(state.state_num, 0))
             isymbol = None
 
         else:
@@ -202,16 +203,16 @@ class FST(NamedTuple):
 
         for transition_isymbol in transitions:
             if transition_isymbol.is_epsilon() or isymbol is not None and transition_isymbol == isymbol:
-                yield from self._transition(input_symbols, state, transitions[transition_isymbol], isymbol, transition_isymbol, input_symbol_index)
+                yield from self._transition(input_symbols, state, transitions[transition_isymbol], isymbol, transition_isymbol, input_symbol_index, keep_non_final=keep_non_final)
         
         if isymbol is not None and isymbol.is_unknown():
             if SpecialSymbol.UNKNOWN in transitions:
-                yield from self._transition(input_symbols, state, transitions[SpecialSymbol.UNKNOWN], isymbol, SpecialSymbol.UNKNOWN, input_symbol_index)
+                yield from self._transition(input_symbols, state, transitions[SpecialSymbol.UNKNOWN], isymbol, SpecialSymbol.UNKNOWN, input_symbol_index, keep_non_final=keep_non_final)
             
             if SpecialSymbol.IDENTITY in transitions:
-                yield from self._transition(input_symbols, state, transitions[SpecialSymbol.IDENTITY], isymbol, SpecialSymbol.IDENTITY, input_symbol_index)
+                yield from self._transition(input_symbols, state, transitions[SpecialSymbol.IDENTITY], isymbol, SpecialSymbol.IDENTITY, input_symbol_index, keep_non_final=keep_non_final)
     
-    def _transition(self, input_symbols: list[Symbol], state: FSTState, transitions: list[tuple[int, Symbol, float]], isymbol: Symbol | None, transition_isymbol: Symbol, input_symbol_index: int | None = None) -> Generator[tuple[bool, bool, FSTState], None, None]:
+    def _transition(self, input_symbols: list[Symbol], state: FSTState, transitions: list[tuple[int, Symbol, float]], isymbol: Symbol | None, transition_isymbol: Symbol, input_symbol_index: int | None = None, keep_non_final: bool = True) -> Generator[tuple[bool, bool, FSTState], None, None]:
         
         # This is None-able for the sake of making it optional on the rust-side
         input_symbol_index = 0 if input_symbol_index is None else input_symbol_index
@@ -240,10 +241,10 @@ class FST(NamedTuple):
             )
 
             if transition_isymbol.is_epsilon():
-                yield from self.run_fst(input_symbols, state=new_state, post_input_advance=len(input_symbols)-input_symbol_index == 0, input_symbol_index=input_symbol_index)
+                yield from self.run_fst(input_symbols, state=new_state, post_input_advance=len(input_symbols)-input_symbol_index == 0, input_symbol_index=input_symbol_index, keep_non_final=keep_non_final)
             
             else:
-                yield from self.run_fst(input_symbols, state=new_state, input_symbol_index=input_symbol_index+1)
+                yield from self.run_fst(input_symbols, state=new_state, input_symbol_index=input_symbol_index+1, keep_non_final=keep_non_final)
     
     def lookup(self, input: str, state=FSTState(0), allow_unknown=True) -> Generator[tuple[str, float], None, None]:
         """
@@ -260,13 +261,10 @@ class FST(NamedTuple):
         if input_symbols is None:
             raise TokenizationException("Input cannot be split into symbols")
 
-        results = self.run_fst(input_symbols, state=state, input_symbol_index=0)
+        results = self.run_fst(input_symbols, state=state, input_symbol_index=0, keep_non_final=False)
         results = sorted(results, key=lambda x: x[2].path_weight)
         already_seen = set()
-        for finished, _, state in results:
-            if not finished:
-                continue
-
+        for _, _, state in results:
             w = state.path_weight
             os = state.output_symbols
             o = "".join(s.get_symbol() for s in os if not s.is_epsilon())
@@ -289,13 +287,10 @@ class FST(NamedTuple):
         if input_symbols is None:
             raise TokenizationException("Input cannot be split into symbols")
 
-        results = self.run_fst(input_symbols, state=state, input_symbol_index=0)
+        results = self.run_fst(input_symbols, state=state, input_symbol_index=0, keep_non_final=False)
         results = sorted(results, key=lambda x: x[2].path_weight)
         already_seen = set()
-        for finished, _, state in results:
-            if not finished:
-                continue
-
+        for _, _, state in results:
             w = state.path_weight
             o = tuple(zip(state.input_indices, state.output_symbols))
             if o not in already_seen:

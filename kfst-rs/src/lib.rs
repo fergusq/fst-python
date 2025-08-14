@@ -84,7 +84,7 @@ use nom::branch::alt;
 use nom::bytes::complete::{tag, take_until1};
 use nom::multi::many_m_n;
 use nom::Parser;
-use std::sync::{LazyLock, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
 use xz2::read::{XzDecoder, XzEncoder};
 
 #[cfg(feature = "python")]
@@ -1437,8 +1437,8 @@ impl<'py> IntoPyObject<'py> for FlagMap {
 // transducer.py
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-enum FSTLinkedList {
-    Some((Symbol, usize), Rc<FSTLinkedList>),
+pub enum FSTLinkedList {
+    Some((Symbol, usize), Arc<FSTLinkedList>),
     None
 }
 
@@ -1457,9 +1457,19 @@ impl FSTLinkedList {
         }
         symbol_mappings.into_iter().rev().collect()
     }
+
+    fn from_vec(output_symbols: Vec<Symbol>, input_indices: Vec<usize>) -> FSTLinkedList {
+        // Convert vec to input_indices
+        let mut symbol_mappings = FSTLinkedList::None;
+        for (symbol, input_index) in output_symbols.into_iter().zip(input_indices.into_iter()) {
+            symbol_mappings = FSTLinkedList::Some((symbol, input_index), Arc::new(symbol_mappings));
+        }
+        symbol_mappings
+
+    }
 }
 
-#[cfg_attr(feature = "python", pyclass(frozen, eq, hash, get_all))]
+#[cfg_attr(feature = "python", pyclass(frozen, eq, hash))]
 #[derive(Clone, Debug, PartialEq)]
 #[readonly::make]
 /// A state in an [FST].
@@ -1468,12 +1478,28 @@ impl FSTLinkedList {
 /// and the input and output flag state.
 pub struct FSTState {
     /// Number of the state in the FST.
+    #[cfg(not(feature = "python"))]
+    pub state_num: u64,
+    #[cfg(feature = "python")]
+    #[pyo3(get)]
     pub state_num: u64,
     /// Sum of transition weights so far.
+    #[cfg(not(feature = "python"))]
+    pub path_weight: f64,
+    #[cfg(feature = "python")]
+    #[pyo3(get)]
     pub path_weight: f64,
     /// Mapping from flags to what they are set to (input side)
+    #[cfg(not(feature = "python"))]
+    pub input_flags: FlagMap,
+    #[cfg(feature = "python")]
+    #[pyo3(get)]
     pub input_flags: FlagMap,
     /// Mapping from flags to what they are set to (output side)
+    #[cfg(not(feature = "python"))]
+    pub output_flags: FlagMap,
+    #[cfg(feature = "python")]
+    #[pyo3(get)]
     pub output_flags: FlagMap,
     /// Output side symbols for the transduction so far.
     pub symbol_mappings: FSTLinkedList,
@@ -1525,11 +1551,6 @@ impl FSTState {
         output_symbols: Vec<Symbol>,
         input_indices: Vec<usize>,
     ) -> Self {
-        // Convert vec to input_indices
-        let mut symbol_mappings = FSTLinkedList::None;
-        for (symbol, input_index) in output_symbols.into_iter().zip(input_indices.into_iter()) {
-            symbol_mappings = FSTLinkedList::Some((symbol, input_index), Rc::new(symbol_mappings));
-        }
         FSTState {
             state_num: state,
             path_weight,
@@ -1545,7 +1566,7 @@ impl FSTState {
                     .map(|(key, value)| (intern(key), (value.0, intern(value.1))))
                     .collect(),
             ),
-            symbol_mappings
+            symbol_mappings: FSTLinkedList::from_vec(output_symbols, input_indices)
         }
     }
 
@@ -1590,22 +1611,45 @@ impl FSTState {
             path_weight,
             input_flags,
             output_flags,
-            input_indices,
-            output_symbols,
+            symbol_mappings: FSTLinkedList::from_vec(output_symbols, input_indices)
         }
+    }
+
+
+    #[cfg(feature = "python")]
+    #[getter]
+    fn output_symbols(&self) -> Vec<Symbol> {
+        self.symbol_mappings.clone().to_vec().into_iter().rev().map(|x| x.0).collect()
+    }
+
+    #[cfg(feature = "python")]
+    #[getter]
+    fn input_indices(&self) -> Vec<usize> {
+        self.symbol_mappings.clone().to_vec().into_iter().rev().map(|x| x.1).collect()
+    }
+
+    #[cfg(not(feature = "python"))]
+    fn output_symbols(&self) -> Vec<Symbol> {
+        self.symbol_mappings.clone().to_vec().into_iter().rev().map(|x| x.0).collect()
+    }
+
+
+    #[cfg(not(feature = "python"))]
+    fn input_indices(&self) -> Vec<usize> {
+        self.symbol_mappings.clone().to_vec().into_iter().rev().map(|x| x.1).collect()
     }
 
     #[deprecated]
     /// Python-style string representation.
     pub fn __repr__(&self) -> String {
-        todo!("Maintain backwards compat");
         format!(
-            "FSTState({}, {}, {:?}, {:?}, {:?})",
+            "FSTState({}, {}, {:?}, {:?}, {:?}, {:?})",
             self.state_num,
             self.path_weight,
             self.input_flags,
             self.output_flags,
-            self.symbol_mappings
+            self.output_symbols(),
+            self.input_indices()
         )
     }
 }
@@ -1788,7 +1832,7 @@ impl FST {
                         }
                         _ =>  osymbol,
                     };
-                    let new_symbol_mapping: FSTLinkedList = FSTLinkedList::Some((new_osymbol.clone(), input_symbol_index), Rc::new(state.symbol_mappings.clone()));
+                    let new_symbol_mapping: FSTLinkedList = FSTLinkedList::Some((new_osymbol.clone(), input_symbol_index), Arc::new(state.symbol_mappings.clone()));
                     let new_state = FSTState {
                         state_num: *next_state,
                         path_weight: state.path_weight + *weight,
@@ -2864,19 +2908,21 @@ impl FST {
     }
 
     #[cfg(feature = "python")]
-    #[pyo3(signature = (input_symbols, state = FSTState::_new(0), post_input_advance = false, input_symbol_index = None))]
+    #[pyo3(signature = (input_symbols, state = FSTState::_new(0), post_input_advance = false, input_symbol_index = None, keep_non_final = true))]
     fn run_fst(
         &self,
         input_symbols: Vec<Symbol>,
         state: FSTState,
         post_input_advance: bool,
         input_symbol_index: Option<usize>,
+        keep_non_final: bool
     ) -> Vec<(bool, bool, FSTState)> {
         self.__run_fst(
             input_symbols,
             state,
             post_input_advance,
             input_symbol_index.unwrap_or(0),
+            keep_non_final
         )
     }
 
@@ -3332,7 +3378,7 @@ fn test_simple_unknown() {
                 path_weight: 0.0,
                 input_flags: FlagMap(im::HashMap::new()),
                 output_flags: FlagMap(im::HashMap::new()),
-                symbol_mappings: FSTLinkedList::Some((Symbol::String(StringSymbol::new("y".to_string(), false)), 0), Rc::new(FSTLinkedList::None))
+                symbol_mappings: FSTLinkedList::Some((Symbol::String(StringSymbol::new("y".to_string(), false)), 0), Arc::new(FSTLinkedList::None))
             }
         )]
     );
@@ -3370,7 +3416,7 @@ fn test_simple_identity() {
                 path_weight: 0.0,
                 input_flags: FlagMap(im::HashMap::new()),
                 output_flags: FlagMap(im::HashMap::new()),
-                symbol_mappings: FSTLinkedList::Some((Symbol::String(StringSymbol::new("x".to_string(), true)), 0), Rc::new(FSTLinkedList::None))
+                symbol_mappings: FSTLinkedList::Some((Symbol::String(StringSymbol::new("x".to_string(), true)), 0), Arc::new(FSTLinkedList::None))
             }
         )]
     );
