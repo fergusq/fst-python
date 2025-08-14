@@ -1684,6 +1684,7 @@ impl FST {
         post_input_advance: bool,
         result: &mut Vec<(bool, bool, FSTState)>,
         input_symbol_index: usize,
+        keep_non_final: bool
     ) {
         let transitions = self.rules.get(&state.state_num);
         let isymbol = if input_symbols.len() - input_symbol_index == 0 {
@@ -1704,7 +1705,9 @@ impl FST {
                 }
                 None => {
                     // Not a final state
-                    result.push((false, post_input_advance, state.clone()));
+                    if keep_non_final {
+                        result.push((false, post_input_advance, state.clone()));
+                    }
                 }
             }
             None
@@ -1722,6 +1725,7 @@ impl FST {
                         isymbol,
                         transition_isymbol,
                         result,
+                        keep_non_final
                     );
                 }
             }
@@ -1738,6 +1742,7 @@ impl FST {
                             Some(isymbol),
                             &Symbol::Special(SpecialSymbol::UNKNOWN),
                             result,
+                            keep_non_final
                         );
                     }
 
@@ -1752,6 +1757,7 @@ impl FST {
                             Some(isymbol),
                             &Symbol::Special(SpecialSymbol::IDENTITY),
                             result,
+                            keep_non_final
                         );
                     }
                 }
@@ -1768,6 +1774,7 @@ impl FST {
         isymbol: Option<&Symbol>,
         transition_isymbol: &Symbol,
         result: &mut Vec<(bool, bool, FSTState)>,
+        keep_non_final: bool
     ) {
         for (next_state, osymbol, weight) in transitions.iter() {
             let new_output_flags = _update_flags(osymbol, &state.output_flags.0);
@@ -1796,6 +1803,7 @@ impl FST {
                             input_symbols.is_empty(),
                             result,
                             input_symbol_index,
+                            keep_non_final
                         );
                     } else {
                         self._run_fst(
@@ -1804,6 +1812,7 @@ impl FST {
                             false,
                             result,
                             input_symbol_index + 1,
+                            keep_non_final
                         );
                     }
                 }
@@ -2399,6 +2408,7 @@ impl FST {
         state: FSTState,
         post_input_advance: bool,
         input_symbol_index: usize,
+        keep_non_final: bool
     ) -> Vec<(bool, bool, FSTState)> {
         let mut result = vec![];
         self._run_fst(
@@ -2407,6 +2417,7 @@ impl FST {
             post_input_advance,
             &mut result,
             input_symbol_index,
+            keep_non_final
         );
         result
     }
@@ -2425,12 +2436,14 @@ impl FST {
         state: FSTState,
         post_input_advance: bool,
         input_symbol_index: Option<usize>,
+        keep_non_final: bool
     ) -> Vec<(bool, bool, FSTState)> {
         self.__run_fst(
             input_symbols,
             state,
             post_input_advance,
             input_symbol_index.unwrap_or(0),
+            keep_non_final
         )
     }
 
@@ -2447,7 +2460,7 @@ impl FST {
                 let mut dedup: IndexSet<String> = IndexSet::new();
                 let mut result: Vec<(String, f64)> = vec![];
                 let mut finished_paths: Vec<_> = self
-                    .run_fst(input_symbols.clone(), state, false, None)
+                    .run_fst(input_symbols.clone(), state, false, None, false)
                     .into_iter()
                     .filter(|(finished, _, _)| *finished)
                     .collect();
@@ -2487,7 +2500,7 @@ impl FST {
                 let mut dedup: IndexSet<Vec<(usize, Symbol)>> = IndexSet::new();
                 let mut result: Vec<(Vec<(usize, Symbol)>, f64)> = vec![];
                 let mut finished_paths: Vec<_> = self
-                    .run_fst(input_symbols.clone(), state, false, None)
+                    .run_fst(input_symbols.clone(), state, false, None, false)
                     .into_iter()
                     .filter(|(finished, _, _)| *finished)
                     .collect();
@@ -3125,7 +3138,7 @@ fn test_kfst_voikko_lentää_correct_states() {
     for i in 0..=input_symbols.len() {
         let subsequence = &input_symbols[..i];
         let mut states: Vec<_> = fst
-            .run_fst(subsequence.to_vec(), FSTState::_new(0), false, None)
+            .run_fst(subsequence.to_vec(), FSTState::_new(0), false, None, true)
             .into_iter()
             .map(|(_, _, x)| x.state_num)
             .collect();
@@ -3139,7 +3152,7 @@ fn test_minimal_r_diacritic() {
     let code = "0\t1\t@P.V_SALLITTU.T@\tasetus\n1\t2\t@R.V_SALLITTU.T@\ttarkistus\n2";
     let fst = FST::from_att_code(code.to_string(), false).unwrap();
     let mut result = vec![];
-    fst._run_fst(&[], &FSTState::_new(0), false, &mut result, 0);
+    fst._run_fst(&[], &FSTState::_new(0), false, &mut result, 0, true);
     for x in result {
         println!("{:?}", x);
     }
@@ -3161,7 +3174,7 @@ fn test_kfst_voikko_lentää_result_count() {
     for i in 0..=input_symbols.len() {
         let subsequence = &input_symbols[..i];
         assert_eq!(
-            fst.run_fst(subsequence.to_vec(), FSTState::_new(0), false, None)
+            fst.run_fst(subsequence.to_vec(), FSTState::_new(0), false, None, true)
                 .len(),
             results[i]
         );
@@ -3300,7 +3313,8 @@ fn test_simple_unknown() {
             vec![Symbol::String(StringSymbol::new("x".to_string(), false,))],
             FSTState::_new(0),
             false,
-            None
+            None,
+            true
         ),
         vec![]
     );
@@ -3310,7 +3324,8 @@ fn test_simple_unknown() {
             vec![Symbol::String(StringSymbol::new("x".to_string(), true,))],
             FSTState::_new(0),
             false,
-            None
+            None,
+            true
         ),
         vec![(
             true,
@@ -3336,7 +3351,8 @@ fn test_simple_identity() {
             vec![Symbol::String(StringSymbol::new("x".to_string(), false,))],
             FSTState::_new(0),
             false,
-            None
+            None,
+            true
         ),
         vec![]
     );
@@ -3346,7 +3362,8 @@ fn test_simple_identity() {
             vec![Symbol::String(StringSymbol::new("x".to_string(), true,))],
             FSTState::_new(0),
             false,
-            None
+            None,
+            true
         ),
         vec![(
             true,
@@ -3411,6 +3428,7 @@ fn test_raw_symbols() {
         FSTState::_new(0),
         false,
         None,
+        true
     );
     let filtered: Vec<_> = result.into_iter().filter(|x| x.0).collect();
     assert_eq!(filtered.len(), 1);
@@ -3433,12 +3451,13 @@ fn test_raw_symbols() {
             vec![sym_a.clone(), sym_b.clone(), sym_a.clone(), sym_d.clone()],
             FSTState::_new(0),
             false,
-            None
+            None,
+            true
         )
         .into_iter()
         .filter(|x| x.0)
         .count(),
-        0
+        0,
     );
 }
 
