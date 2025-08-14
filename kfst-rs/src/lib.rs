@@ -2460,10 +2460,7 @@ impl FST {
                 let mut dedup: IndexSet<String> = IndexSet::new();
                 let mut result: Vec<(String, f64)> = vec![];
                 let mut finished_paths: Vec<_> = self
-                    .run_fst(input_symbols.clone(), state, false, None, false)
-                    .into_iter()
-                    .filter(|(finished, _, _)| *finished)
-                    .collect();
+                    .run_fst(input_symbols.clone(), state, false, None, false);
                 finished_paths
                     .sort_by(|a, b| a.2.path_weight.partial_cmp(&b.2.path_weight).unwrap());
                 for finished in finished_paths {
