@@ -1438,8 +1438,25 @@ impl<'py> IntoPyObject<'py> for FlagMap {
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 enum FSTLinkedList {
-    Some(usize, Rc<FSTLinkedList>),
+    Some((Symbol, usize), Rc<FSTLinkedList>),
     None
+}
+
+impl FSTLinkedList {
+    fn to_vec(self) -> Vec<(Symbol, usize)> {
+        let mut symbol_mappings = vec![];
+        let mut symbol_mapping_state = &self;
+        loop {
+            match symbol_mapping_state {
+                FSTLinkedList::Some(value, list) => {
+                    symbol_mapping_state = list;
+                    symbol_mappings.push(value.clone());
+                },
+                FSTLinkedList::None => break,
+            }
+        }
+        symbol_mappings.into_iter().rev().collect()
+    }
 }
 
 #[cfg_attr(feature = "python", pyclass(frozen, eq, hash, get_all))]
@@ -1459,9 +1476,7 @@ pub struct FSTState {
     /// Mapping from flags to what they are set to (output side)
     pub output_flags: FlagMap,
     /// Output side symbols for the transduction so far.
-    pub output_symbols: Vec<Symbol>,
-    /// Output side symbols for the transduction so far.
-    pub input_indices: FSTLinkedList,
+    pub symbol_mappings: FSTLinkedList,
 }
 
 impl Default for FSTState {
@@ -1472,8 +1487,7 @@ impl Default for FSTState {
             path_weight: 0.0,
             input_flags: FlagMap(im::HashMap::new()),
             output_flags: FlagMap(im::HashMap::new()),
-            input_indices: FSTLinkedList::None,
-            output_symbols: vec![],
+            symbol_mappings: FSTLinkedList::None,
         }
     }
 }
@@ -1484,8 +1498,7 @@ impl Hash for FSTState {
         self.path_weight.to_be_bytes().hash(state);
         self.input_flags.hash(state);
         self.output_flags.hash(state);
-        self.input_indices.hash(state);
-        self.output_symbols.hash(state);
+        self.symbol_mappings.hash(state);
     }
 }
 
@@ -1500,8 +1513,7 @@ impl FSTState {
             path_weight: 0.0,
             input_flags: FlagMap(im::HashMap::new()),
             output_flags: FlagMap(im::HashMap::new()),
-            input_indices: FSTLinkedList::None,
-            output_symbols: vec![],
+            symbol_mappings: FSTLinkedList::None,
         }
     }
 
@@ -1514,9 +1526,9 @@ impl FSTState {
         input_indices: Vec<usize>,
     ) -> Self {
         // Convert vec to input_indices
-        let mut input_index_list = FSTLinkedList::None;
-        for input_index in input_indices.into_iter() {
-            input_index_list = FSTLinkedList::Some(input_index, Rc::new(input_index_list));
+        let mut symbol_mappings = FSTLinkedList::None;
+        for (symbol, input_index) in output_symbols.into_iter().zip(input_indices.into_iter()) {
+            symbol_mappings = FSTLinkedList::Some((symbol, input_index), Rc::new(symbol_mappings));
         }
         FSTState {
             state_num: state,
@@ -1533,8 +1545,7 @@ impl FSTState {
                     .map(|(key, value)| (intern(key), (value.0, intern(value.1))))
                     .collect(),
             ),
-            input_indices: input_index_list,
-            output_symbols,
+            symbol_mappings
         }
     }
 
@@ -1587,14 +1598,14 @@ impl FSTState {
     #[deprecated]
     /// Python-style string representation.
     pub fn __repr__(&self) -> String {
+        todo!("Maintain backwards compat");
         format!(
-            "FSTState({}, {}, {:?}, {:?}, {:?}, {:?})",
+            "FSTState({}, {}, {:?}, {:?}, {:?})",
             self.state_num,
             self.path_weight,
             self.input_flags,
             self.output_flags,
-            self.input_indices,
-            self.output_symbols
+            self.symbol_mappings
         )
     }
 }
@@ -1687,8 +1698,7 @@ impl FST {
                             path_weight: state.path_weight + weight,
                             input_flags: state.input_flags.clone(),
                             output_flags: state.output_flags.clone(),
-                            input_indices: state.input_indices.clone(),
-                            output_symbols: state.output_symbols.clone(),
+                            symbol_mappings: state.symbol_mappings.clone()
                         },
                     ));
                 }
@@ -1765,21 +1775,19 @@ impl FST {
 
             match (new_output_flags, new_input_flags) {
                 (Some(new_output_flags), Some(new_input_flags)) => {
-                    let mut new_output_symbols: Vec<Symbol> = state.output_symbols.clone();
-                    match (isymbol, osymbol) {
+                    let new_osymbol = match (isymbol, osymbol) {
                         (Some(isymbol), Symbol::Special(SpecialSymbol::IDENTITY)) => {
-                            new_output_symbols.push(isymbol.clone())
+                            isymbol
                         }
-                        _ => new_output_symbols.push(osymbol.clone()),
+                        _ =>  osymbol,
                     };
-                    let new_input_indices: FSTLinkedList = FSTLinkedList::Some(input_symbol_index, Rc::new(state.input_indices.clone()));
+                    let new_symbol_mapping: FSTLinkedList = FSTLinkedList::Some((new_osymbol.clone(), input_symbol_index), Rc::new(state.symbol_mappings.clone()));
                     let new_state = FSTState {
                         state_num: *next_state,
                         path_weight: state.path_weight + *weight,
                         input_flags: FlagMap(new_input_flags),
                         output_flags: FlagMap(new_output_flags),
-                        input_indices: new_input_indices,
-                        output_symbols: new_output_symbols,
+                        symbol_mappings: new_symbol_mapping
                     };
                     if transition_isymbol.is_epsilon() {
                         self._run_fst(
@@ -2448,10 +2456,11 @@ impl FST {
                 for finished in finished_paths {
                     let output_string: String = finished
                         .2
-                        .output_symbols
+                        .symbol_mappings
+                        .to_vec()
                         .iter()
-                        .filter(|x| !x.is_epsilon())
-                        .map(|x| x.get_symbol())
+                        .filter(|x| !x.0.is_epsilon())
+                        .map(|x| x.0.get_symbol())
                         .collect::<Vec<String>>()
                         .join("");
                     if dedup.contains(&output_string) {
@@ -2485,21 +2494,7 @@ impl FST {
                 finished_paths
                     .sort_by(|a, b| a.2.path_weight.partial_cmp(&b.2.path_weight).unwrap());
                 for finished in finished_paths {
-                    let mut output_idxs = vec![];
-                    let mut output_idx_state = &finished.2.input_indices;
-                    loop {
-                        match output_idx_state {
-                            FSTLinkedList::Some(value, list) => {
-                                output_idx_state = list;
-                                output_idxs.push(*value);
-                            },
-                            FSTLinkedList::None => break,
-                        }
-                    }
-                    
-                    let output_vec: Vec<(usize, Symbol)> = output_idxs.into_iter().rev()
-                        .zip(finished.2.output_symbols.into_iter())
-                        .collect();
+                    let output_vec: Vec<(usize, Symbol)> = finished.2.symbol_mappings.to_vec().into_iter().map(|(a, b)| (b, a)).collect();
                     if dedup.contains(&output_vec) {
                         continue;
                     }
@@ -3325,8 +3320,7 @@ fn test_simple_unknown() {
                 path_weight: 0.0,
                 input_flags: FlagMap(im::HashMap::new()),
                 output_flags: FlagMap(im::HashMap::new()),
-                input_indices: FSTLinkedList::Some(0, Rc::new(FSTLinkedList::None)),
-                output_symbols: vec![Symbol::String(StringSymbol::new("y".to_string(), false))]
+                symbol_mappings: FSTLinkedList::Some((Symbol::String(StringSymbol::new("y".to_string(), false)), 0), Rc::new(FSTLinkedList::None))
             }
         )]
     );
@@ -3362,8 +3356,7 @@ fn test_simple_identity() {
                 path_weight: 0.0,
                 input_flags: FlagMap(im::HashMap::new()),
                 output_flags: FlagMap(im::HashMap::new()),
-                input_indices: FSTLinkedList::Some(0, Rc::new(FSTLinkedList::None)),
-                output_symbols: vec![Symbol::String(StringSymbol::new("x".to_string(), true))]
+                symbol_mappings: FSTLinkedList::Some((Symbol::String(StringSymbol::new("x".to_string(), true)), 0), Rc::new(FSTLinkedList::None))
             }
         )]
     );
@@ -3423,7 +3416,7 @@ fn test_raw_symbols() {
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].2.state_num, 3);
     assert_eq!(
-        filtered[0].2.output_symbols,
+        filtered[0].2.symbol_mappings.clone().to_vec().iter().into_iter().map(|x| x.0.clone()).collect::<Vec<_>>(),
         vec![
             sym_a.clone(),
             sym_b.clone(),
