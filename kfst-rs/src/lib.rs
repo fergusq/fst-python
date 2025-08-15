@@ -1403,7 +1403,51 @@ impl FromPyObject<'_> for Symbol {
 /// (name -> (direction of setting where true is positive, value))
 /// ```
 /// name and value are interned string indices.
-pub struct FlagMap(pub im::HashMap<u32, (bool, u32)>);
+pub struct FlagMap(Vec<(u32, bool, u32)>);
+
+impl FlagMap {
+    fn new() -> FlagMap {
+        FlagMap(vec![])
+    }
+
+    fn from_hash_map(h: HashMap<String, (bool, String)>) -> FlagMap {
+        let mut vals: Vec<_> = h.into_iter().map(|(a, (b, c))| (intern(a), b, intern(c))).collect();
+        vals.sort();
+        FlagMap(vals)
+    }
+
+    fn remove(&self, flag: u32) -> FlagMap {
+        let pp = self.0.partition_point(|v| v.0 < flag);
+        if pp < self.0.len() && self.0[pp].0 == flag {
+            let mut new_vals = self.0.clone();
+            new_vals.remove(pp);
+            FlagMap(new_vals)
+        } else {
+            self.clone()
+        }
+    }
+
+    fn get(&self, flag: u32) -> Option<(bool, u32)> {
+        let pp = self.0.partition_point(|v| v.0 < flag);
+        if pp < self.0.len() && self.0[pp].0 == flag{
+            Some((self.0[pp].1, self.0[pp].2))
+        } else {
+            None
+        }
+
+    }
+
+    fn insert(&self, flag: u32, value: (bool, u32)) -> FlagMap {
+        let pp = self.0.partition_point(|v| v.0 < flag);
+        let mut new_vals = self.0.clone();
+        if(pp == self.0.len() || self.0[pp].0 != flag) {
+            new_vals.insert(pp, (flag, value.0, value.1));
+        } else {
+            new_vals[pp] = (flag, value.0, value.1);
+        }
+        FlagMap(new_vals)
+    }
+}
 
 #[cfg(feature = "python")]
 impl FromPyObject<'_> for FlagMap {
@@ -1511,8 +1555,8 @@ impl Default for FSTState {
         Self {
             state_num: 0,
             path_weight: 0.0,
-            input_flags: FlagMap(im::HashMap::new()),
-            output_flags: FlagMap(im::HashMap::new()),
+            input_flags: FlagMap::new(),
+            output_flags: FlagMap::new(),
             symbol_mappings: FSTLinkedList::None,
         }
     }
@@ -1537,8 +1581,8 @@ impl FSTState {
         FSTState {
             state_num: state,
             path_weight: 0.0,
-            input_flags: FlagMap(im::HashMap::new()),
-            output_flags: FlagMap(im::HashMap::new()),
+            input_flags: FlagMap::new(),
+            output_flags: FlagMap::new(),
             symbol_mappings: FSTLinkedList::None,
         }
     }
@@ -1554,18 +1598,8 @@ impl FSTState {
         FSTState {
             state_num: state,
             path_weight,
-            input_flags: FlagMap(
-                input_flags
-                    .into_iter()
-                    .map(|(key, value)| (intern(key), (value.0, intern(value.1))))
-                    .collect(),
-            ),
-            output_flags: FlagMap(
-                output_flags
-                    .into_iter()
-                    .map(|(key, value)| (intern(key), (value.0, intern(value.1))))
-                    .collect(),
-            ),
+            input_flags: FlagMap::from_hash_map(input_flags),
+            output_flags: FlagMap::from_hash_map(output_flags),
             symbol_mappings: FSTLinkedList::from_vec(output_symbols, input_indices),
         }
     }
@@ -1843,8 +1877,8 @@ impl FST {
         keep_non_final: bool,
     ) {
         for (next_state, osymbol, weight) in transitions.iter() {
-            let new_output_flags = _update_flags(osymbol, &state.output_flags.0);
-            let new_input_flags = _update_flags(transition_isymbol, &state.input_flags.0);
+            let new_output_flags = _update_flags(osymbol, &state.output_flags);
+            let new_input_flags = _update_flags(transition_isymbol, &state.input_flags);
 
             match (new_output_flags, new_input_flags) {
                 (Some(new_output_flags), Some(new_input_flags)) => {
@@ -1859,8 +1893,8 @@ impl FST {
                     let new_state = FSTState {
                         state_num: *next_state,
                         path_weight: state.path_weight + *weight,
-                        input_flags: FlagMap(new_input_flags),
-                        output_flags: FlagMap(new_output_flags),
+                        input_flags: new_input_flags,
+                        output_flags: new_output_flags,
                         symbol_mappings: new_symbol_mapping,
                     };
                     if transition_isymbol.is_epsilon() {
@@ -2508,10 +2542,10 @@ impl FST {
                         if !isym.is_epsilon() {
                             break; // Trust that the order of the FST guarantees us this
                         }
-                        if let Some(input_flags) = _update_flags(isym, &state.input_flags.0) {
+                        if let Some(input_flags) = _update_flags(isym, &state.input_flags) {
                             for (target_state, osym, weight) in rulebook.iter() {
                                 if let Some(output_flags) =
-                                    _update_flags(osym, &state.output_flags.0)
+                                    _update_flags(osym, &state.output_flags)
                                 {
                                     let new_symbol_mappings = FSTLinkedList::Some(
                                         (osym.clone(), input_symbol_index),
@@ -2520,8 +2554,8 @@ impl FST {
                                     new_new_states.push(FSTState {
                                         state_num: *target_state,
                                         path_weight: state.path_weight + weight,
-                                        input_flags: FlagMap(input_flags.clone()),
-                                        output_flags: FlagMap(output_flags),
+                                        input_flags: input_flags.clone(),
+                                        output_flags: output_flags,
                                         symbol_mappings: new_symbol_mappings,
                                     });
                                 }
@@ -2556,7 +2590,7 @@ impl FST {
                                 assert!(!matches!(isym, Symbol::Flag(_))); // That would just be silly
                                 for (target_state, output_sym, weight) in rulebook {
                                     if let Some(output_flags) =
-                                        _update_flags(output_sym, &state.output_flags.0)
+                                        _update_flags(output_sym, &state.output_flags)
                                     {
                                         let new_symbol_mappings = FSTLinkedList::Some(
                                             (output_sym.clone(), isym_index),
@@ -2568,7 +2602,7 @@ impl FST {
                                             // Safe not to update top flags
                                             // We know that we don't have an input flag
                                             input_flags: state.input_flags.clone(),
-                                            output_flags: FlagMap(output_flags),
+                                            output_flags: output_flags,
                                             symbol_mappings: new_symbol_mappings,
                                         });
                                     }
@@ -2599,7 +2633,7 @@ impl FST {
                                         Symbol::Special(SpecialSymbol::UNKNOWN) => {
                                             for (target_state, output_sym, weight) in rulebook {
                                                 if let Some(output_flags) =
-                                                    _update_flags(output_sym, &state.output_flags.0)
+                                                    _update_flags(output_sym, &state.output_flags)
                                                 {
                                                     let new_symbol_mappings = FSTLinkedList::Some(
                                                         (output_sym.clone(), isym_index),
@@ -2611,7 +2645,7 @@ impl FST {
                                                         // Safe not to update top flags
                                                         // We know that we are at UNKNOWN:xxx
                                                         input_flags: state.input_flags.clone(),
-                                                        output_flags: FlagMap(output_flags),
+                                                        output_flags: output_flags,
                                                         symbol_mappings: new_symbol_mappings,
                                                     });
                                                 }
@@ -2837,8 +2871,8 @@ impl FST {
 
 fn _update_flags(
     symbol: &Symbol,
-    flags: &im::HashMap<u32, (bool, u32)>,
-) -> Option<im::HashMap<u32, (bool, u32)>> {
+    flags: &FlagMap,
+) -> Option<FlagMap> {
     if let Symbol::Flag(flag_diacritic_symbol) = symbol {
         match flag_diacritic_symbol.flag_type {
             FlagDiacriticType::U => {
@@ -2847,10 +2881,10 @@ fn _update_flags(
                 // Is the current state somehow in conflict?
                 // It can be, if we are negatively set to what we try to unify to or we are positively set to sth else
 
-                if let Some((currently_set, current_value)) = flags.get(&flag_diacritic_symbol.key)
+                if let Some((currently_set, current_value)) = flags.get(flag_diacritic_symbol.key)
                 {
-                    if (*currently_set && current_value != &value)
-                        || (!currently_set && current_value == &value)
+                    if (currently_set && current_value != value)
+                        || (!currently_set && current_value == value)
                     {
                         return None;
                     }
@@ -2858,16 +2892,14 @@ fn _update_flags(
 
                 // Otherwise, update flag set
 
-                let mut clone: im::HashMap<u32, (bool, u32)> = flags.clone();
-                clone.insert(flag_diacritic_symbol.key, (true, value));
-                Some(clone)
+                Some(flags.insert(flag_diacritic_symbol.key, (true, value)))
             }
             FlagDiacriticType::R => {
                 // Param count matters
 
                 match flag_diacritic_symbol.value {
                     u32::MAX => {
-                        if flags.contains_key(&flag_diacritic_symbol.key) {
+                        if flags.get(flag_diacritic_symbol.key).is_some() {
                             Some(flags.clone())
                         } else {
                             None
@@ -2875,8 +2907,8 @@ fn _update_flags(
                     }
                     value => {
                         if flags
-                            .get(&flag_diacritic_symbol.key)
-                            .map(|stored| _test_flag(stored, value))
+                            .get(flag_diacritic_symbol.key)
+                            .map(|stored| _test_flag(&stored, value))
                             .unwrap_or(false)
                         {
                             Some(flags.clone())
@@ -2889,13 +2921,13 @@ fn _update_flags(
             FlagDiacriticType::D => {
                 match (
                     flag_diacritic_symbol.value,
-                    flags.get(&flag_diacritic_symbol.key),
+                    flags.get(flag_diacritic_symbol.key),
                 ) {
                     (u32::MAX, None) => Some(flags.clone()),
                     (u32::MAX, _) => None,
                     (_, None) => Some(flags.clone()),
                     (query, Some(stored)) => {
-                        if _test_flag(stored, query) {
+                        if _test_flag(&stored, query) {
                             None
                         } else {
                             Some(flags.clone())
@@ -2904,21 +2936,15 @@ fn _update_flags(
                 }
             }
             FlagDiacriticType::C => {
-                let mut flag_clone = flags.clone();
-                flag_clone.remove(&flag_diacritic_symbol.key);
-                Some(flag_clone)
+                Some(flags.remove(flag_diacritic_symbol.key))
             }
             FlagDiacriticType::P => {
                 let value = flag_diacritic_symbol.value;
-                let mut flag_clone = flags.clone();
-                flag_clone.insert(flag_diacritic_symbol.key, (true, value));
-                Some(flag_clone)
+                Some(flags.insert(flag_diacritic_symbol.key, (true, value)))
             }
             FlagDiacriticType::N => {
                 let value = flag_diacritic_symbol.value;
-                let mut flag_clone = flags.clone();
-                flag_clone.insert(flag_diacritic_symbol.key, (false, value));
-                Some(flag_clone)
+                Some(flags.insert(flag_diacritic_symbol.key, (false, value)))
             }
         }
     } else {
@@ -3563,8 +3589,8 @@ fn test_simple_unknown() {
             FSTState {
                 state_num: 1,
                 path_weight: 0.0,
-                input_flags: FlagMap(im::HashMap::new()),
-                output_flags: FlagMap(im::HashMap::new()),
+                input_flags: FlagMap::new(),
+                output_flags: FlagMap::new(),
                 symbol_mappings: FSTLinkedList::Some(
                     (Symbol::String(StringSymbol::new("y".to_string(), false)), 0),
                     Arc::new(FSTLinkedList::None)
@@ -3604,8 +3630,8 @@ fn test_simple_identity() {
             FSTState {
                 state_num: 1,
                 path_weight: 0.0,
-                input_flags: FlagMap(im::HashMap::new()),
-                output_flags: FlagMap(im::HashMap::new()),
+                input_flags: FlagMap::new(),
+                output_flags: FlagMap::new(),
                 symbol_mappings: FSTLinkedList::Some(
                     (Symbol::String(StringSymbol::new("x".to_string(), true)), 0),
                     Arc::new(FSTLinkedList::None)
