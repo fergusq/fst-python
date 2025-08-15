@@ -68,7 +68,7 @@
 //! ```
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 #[cfg(feature = "python")]
 use std::fmt::Error;
@@ -79,7 +79,6 @@ use std::path::Path;
 use std::rc::Rc;
 use std::result;
 
-use im::HashMap;
 use indexmap::{indexmap, IndexMap, IndexSet};
 use nom::branch::alt;
 use nom::bytes::complete::{tag, take_until1};
@@ -1405,15 +1404,24 @@ impl FromPyObject<'_> for Symbol {
 /// name and value are interned string indices.
 pub struct FlagMap(Vec<(u32, bool, u32)>);
 
+
+impl FromIterator<(String, (bool, String))> for FlagMap {
+    fn from_iter<T: IntoIterator<Item = (String, (bool, String))>>(iter: T) -> Self {
+        let mut vals: Vec<_> = iter.into_iter().map(|(a, (b, c))| (intern(a), b, intern(c))).collect();
+        vals.sort();
+        FlagMap(vals)
+    }
+}
+
+impl<T> From<T> for FlagMap where T: IntoIterator<Item=(String, (bool, String))> {
+    fn from(value: T) -> Self {
+        FlagMap::from_iter(value.into_iter())
+    }
+}
+
 impl FlagMap {
     fn new() -> FlagMap {
         FlagMap(vec![])
-    }
-
-    fn from_hash_map(h: HashMap<String, (bool, String)>) -> FlagMap {
-        let mut vals: Vec<_> = h.into_iter().map(|(a, (b, c))| (intern(a), b, intern(c))).collect();
-        vals.sort();
-        FlagMap(vals)
     }
 
     fn remove(&self, flag: u32) -> FlagMap {
@@ -1440,7 +1448,7 @@ impl FlagMap {
     fn insert(&self, flag: u32, value: (bool, u32)) -> FlagMap {
         let pp = self.0.partition_point(|v| v.0 < flag);
         let mut new_vals = self.0.clone();
-        if(pp == self.0.len() || self.0[pp].0 != flag) {
+        if pp == self.0.len() || self.0[pp].0 != flag {
             new_vals.insert(pp, (flag, value.0, value.1));
         } else {
             new_vals[pp] = (flag, value.0, value.1);
@@ -1452,14 +1460,15 @@ impl FlagMap {
 #[cfg(feature = "python")]
 impl FromPyObject<'_> for FlagMap {
     fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let as_map: im::HashMap<_, _> = ob
+        let mut as_map: Vec<(u32, bool, u32)> = ob
             .getattr("items")?
             .call0()?
             .try_iter()?
             .map(|x| x.unwrap().extract().unwrap())
-            .map(|(key, value): (String, (bool, String))| (intern(key), (value.0, intern(value.1))))
+            .map(|(key, value): (String, (bool, String))| (intern(key), value.0, intern(value.1)))
             .collect();
-        Ok(FlagMap(as_map))
+        as_map.sort();
+        Ok(FlagMap { 0: as_map })
     }
 }
 
@@ -1474,6 +1483,7 @@ impl<'py> IntoPyObject<'py> for FlagMap {
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
         self.0
             .into_iter()
+            .map(|(a, b, c)| (a, (b, c)))
             .collect::<std::collections::HashMap<_, _>>()
             .into_pyobject(py)
     }
@@ -1587,19 +1597,19 @@ impl FSTState {
         }
     }
 
-    fn __new(
+    fn __new<F>(
         state: u64,
         path_weight: f64,
-        input_flags: im::HashMap<String, (bool, String)>,
-        output_flags: im::HashMap<String, (bool, String)>,
+        input_flags: F,
+        output_flags: F,
         output_symbols: Vec<Symbol>,
         input_indices: Vec<usize>,
-    ) -> Self {
+    ) -> Self where F: Into<FlagMap>{
         FSTState {
             state_num: state,
             path_weight,
-            input_flags: FlagMap::from_hash_map(input_flags),
-            output_flags: FlagMap::from_hash_map(output_flags),
+            input_flags: input_flags.into(),
+            output_flags: output_flags.into(),
             symbol_mappings: FSTLinkedList::from_vec(output_symbols, input_indices),
         }
     }
@@ -1608,14 +1618,14 @@ impl FSTState {
     /// Construct a new FSTState. All arguments are per FSTState fields, except for the flag states.
     /// These are not a [FlagMap] but and IndexMap of (name -> (direction of setting where true is positively set, value))
     /// where name and value get interned.
-    pub fn new(
+    pub fn new<F>(
         state_num: u64,
         path_weight: f64,
-        input_flags: im::HashMap<String, (bool, String)>,
-        output_flags: im::HashMap<String, (bool, String)>,
+        input_flags: F,
+        output_flags: F,
         output_symbols: Vec<Symbol>,
         input_indices: Vec<usize>,
-    ) -> Self {
+    ) -> Self where F: Into<FlagMap> {
         FSTState::__new(
             state_num,
             path_weight,
@@ -1631,7 +1641,7 @@ impl FSTState {
 impl FSTState {
     #[cfg(feature = "python")]
     #[new]
-    #[pyo3(signature = (state_num, path_weight=0.0, input_flags = FlagMap(im::HashMap::new()), output_flags = FlagMap(im::HashMap::new()), output_symbols=vec![], input_indices=vec![]))]
+    #[pyo3(signature = (state_num, path_weight=0.0, input_flags = FlagMap::new(), output_flags = FlagMap::new(), output_symbols=vec![], input_indices=vec![]))]
     fn new(
         state_num: u64,
         path_weight: f64,
@@ -3166,14 +3176,13 @@ impl FST {
     ///
     /// ```
     /// use kfst_rs::{FST, Symbol, FSTState};
-    /// use std::collections::HashSet;
-    /// use im::HashMap;
+    /// use std::collections::{HashSet, HashMap};
     ///
     /// let fst = FST::from_att_code("0\t1\ta\tb\n".to_string(), false).unwrap();
     /// let mut expected = HashSet::new();
     /// expected.insert(Symbol::parse("a").unwrap().1);
-    /// assert_eq!(fst.get_input_symbols(FSTState::new(0, 0.0, im::HashMap::new(), im::HashMap::new(), vec![], vec![])), expected);
-    /// assert_eq!(fst.get_input_symbols(FSTState::new(1, 0.0, im::HashMap::new(), im::HashMap::new(), vec![], vec![])), HashSet::new());
+    /// assert_eq!(fst.get_input_symbols(FSTState::new(0, 0.0, HashMap::new(), HashMap::new(), vec![], vec![])), expected);
+    /// assert_eq!(fst.get_input_symbols(FSTState::new(1, 0.0, HashMap::new(), HashMap::new(), vec![], vec![])), HashSet::new());
     /// ```
     pub fn get_input_symbols(&self, state: FSTState) -> HashSet<Symbol> {
         self.rules
