@@ -77,6 +77,7 @@ use std::hash::Hash;
 use std::io::Read;
 use std::path::Path;
 use std::rc::Rc;
+use std::result;
 
 use im::HashMap;
 use indexmap::{indexmap, IndexMap, IndexSet};
@@ -1395,7 +1396,7 @@ impl FromPyObject<'_> for Symbol {
             .or_else(|_| ob.extract().map(Symbol::External))
     }
 }
-#[derive(Clone, Debug, PartialEq, Hash)]
+#[derive(Clone, Debug, PartialEq, Hash, PartialOrd, Eq, Ord)]
 #[readonly::make]
 /// The flag state of an [FSTState]:
 /// ```no_test
@@ -1439,7 +1440,7 @@ impl<'py> IntoPyObject<'py> for FlagMap {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum FSTLinkedList {
     Some((Symbol, usize), Arc<FSTLinkedList>),
-    None
+    None,
 }
 
 impl FSTLinkedList {
@@ -1451,7 +1452,7 @@ impl FSTLinkedList {
                 FSTLinkedList::Some(value, list) => {
                     symbol_mapping_state = list;
                     symbol_mappings.push(value.clone());
-                },
+                }
                 FSTLinkedList::None => break,
             }
         }
@@ -1465,12 +1466,11 @@ impl FSTLinkedList {
             symbol_mappings = FSTLinkedList::Some((symbol, input_index), Arc::new(symbol_mappings));
         }
         symbol_mappings
-
     }
 }
 
 #[cfg_attr(feature = "python", pyclass(frozen, eq, hash))]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
 #[readonly::make]
 /// A state in an [FST].
 /// Not only does this contain the state number itself,
@@ -1566,7 +1566,7 @@ impl FSTState {
                     .map(|(key, value)| (intern(key), (value.0, intern(value.1))))
                     .collect(),
             ),
-            symbol_mappings: FSTLinkedList::from_vec(output_symbols, input_indices)
+            symbol_mappings: FSTLinkedList::from_vec(output_symbols, input_indices),
         }
     }
 
@@ -1611,32 +1611,54 @@ impl FSTState {
             path_weight,
             input_flags,
             output_flags,
-            symbol_mappings: FSTLinkedList::from_vec(output_symbols, input_indices)
+            symbol_mappings: FSTLinkedList::from_vec(output_symbols, input_indices),
         }
     }
 
-
     #[cfg(feature = "python")]
     #[getter]
     fn output_symbols(&self) -> Vec<Symbol> {
-        self.symbol_mappings.clone().to_vec().into_iter().rev().map(|x| x.0).collect()
+        self.symbol_mappings
+            .clone()
+            .to_vec()
+            .into_iter()
+            .rev()
+            .map(|x| x.0)
+            .collect()
     }
 
     #[cfg(feature = "python")]
     #[getter]
     fn input_indices(&self) -> Vec<usize> {
-        self.symbol_mappings.clone().to_vec().into_iter().rev().map(|x| x.1).collect()
+        self.symbol_mappings
+            .clone()
+            .to_vec()
+            .into_iter()
+            .rev()
+            .map(|x| x.1)
+            .collect()
     }
 
     #[cfg(not(feature = "python"))]
     fn output_symbols(&self) -> Vec<Symbol> {
-        self.symbol_mappings.clone().to_vec().into_iter().rev().map(|x| x.0).collect()
+        self.symbol_mappings
+            .clone()
+            .to_vec()
+            .into_iter()
+            .rev()
+            .map(|x| x.0)
+            .collect()
     }
-
 
     #[cfg(not(feature = "python"))]
     fn input_indices(&self) -> Vec<usize> {
-        self.symbol_mappings.clone().to_vec().into_iter().rev().map(|x| x.1).collect()
+        self.symbol_mappings
+            .clone()
+            .to_vec()
+            .into_iter()
+            .rev()
+            .map(|x| x.1)
+            .collect()
     }
 
     #[deprecated]
@@ -1728,7 +1750,7 @@ impl FST {
         post_input_advance: bool,
         result: &mut Vec<(bool, bool, FSTState)>,
         input_symbol_index: usize,
-        keep_non_final: bool
+        keep_non_final: bool,
     ) {
         let transitions = self.rules.get(&state.state_num);
         let isymbol = if input_symbols.len() - input_symbol_index == 0 {
@@ -1743,7 +1765,7 @@ impl FST {
                             path_weight: state.path_weight + weight,
                             input_flags: state.input_flags.clone(),
                             output_flags: state.output_flags.clone(),
-                            symbol_mappings: state.symbol_mappings.clone()
+                            symbol_mappings: state.symbol_mappings.clone(),
                         },
                     ));
                 }
@@ -1769,7 +1791,7 @@ impl FST {
                         isymbol,
                         transition_isymbol,
                         result,
-                        keep_non_final
+                        keep_non_final,
                     );
                 }
             }
@@ -1786,7 +1808,7 @@ impl FST {
                             Some(isymbol),
                             &Symbol::Special(SpecialSymbol::UNKNOWN),
                             result,
-                            keep_non_final
+                            keep_non_final,
                         );
                     }
 
@@ -1801,7 +1823,7 @@ impl FST {
                             Some(isymbol),
                             &Symbol::Special(SpecialSymbol::IDENTITY),
                             result,
-                            keep_non_final
+                            keep_non_final,
                         );
                     }
                 }
@@ -1818,7 +1840,7 @@ impl FST {
         isymbol: Option<&Symbol>,
         transition_isymbol: &Symbol,
         result: &mut Vec<(bool, bool, FSTState)>,
-        keep_non_final: bool
+        keep_non_final: bool,
     ) {
         for (next_state, osymbol, weight) in transitions.iter() {
             let new_output_flags = _update_flags(osymbol, &state.output_flags.0);
@@ -1827,18 +1849,19 @@ impl FST {
             match (new_output_flags, new_input_flags) {
                 (Some(new_output_flags), Some(new_input_flags)) => {
                     let new_osymbol = match (isymbol, osymbol) {
-                        (Some(isymbol), Symbol::Special(SpecialSymbol::IDENTITY)) => {
-                            isymbol
-                        }
-                        _ =>  osymbol,
+                        (Some(isymbol), Symbol::Special(SpecialSymbol::IDENTITY)) => isymbol,
+                        _ => osymbol,
                     };
-                    let new_symbol_mapping: FSTLinkedList = FSTLinkedList::Some((new_osymbol.clone(), input_symbol_index), Arc::new(state.symbol_mappings.clone()));
+                    let new_symbol_mapping: FSTLinkedList = FSTLinkedList::Some(
+                        (new_osymbol.clone(), input_symbol_index),
+                        Arc::new(state.symbol_mappings.clone()),
+                    );
                     let new_state = FSTState {
                         state_num: *next_state,
                         path_weight: state.path_weight + *weight,
                         input_flags: FlagMap(new_input_flags),
                         output_flags: FlagMap(new_output_flags),
-                        symbol_mappings: new_symbol_mapping
+                        symbol_mappings: new_symbol_mapping,
                     };
                     if transition_isymbol.is_epsilon() {
                         self._run_fst(
@@ -1847,7 +1870,7 @@ impl FST {
                             input_symbols.is_empty(),
                             result,
                             input_symbol_index,
-                            keep_non_final
+                            keep_non_final,
                         );
                     } else {
                         self._run_fst(
@@ -1856,7 +1879,7 @@ impl FST {
                             false,
                             result,
                             input_symbol_index + 1,
-                            keep_non_final
+                            keep_non_final,
                         );
                     }
                 }
@@ -2191,9 +2214,16 @@ impl FST {
         // Sort by normal comparison but in reverse; this guarantees reverse order by length and also
         // That different-by-symbol-string symbols get treated differently
         new_symbols.sort();
+        // Sort rules such that epsilons are at the start
+        let mut new_rules = IndexMap::new();
+        for (target_node, rulebook) in rules {
+            let mut new_rulebook = rulebook;
+            new_rulebook.sort_by(|a, _, b, _| b.is_epsilon().cmp(&a.is_epsilon()));
+            new_rules.insert(target_node, new_rulebook);
+        }
         FST {
             final_states,
-            rules,
+            rules: new_rules,
             symbols: new_symbols,
             debug: debug.unwrap_or(false),
         }
@@ -2452,7 +2482,7 @@ impl FST {
         state: FSTState,
         post_input_advance: bool,
         input_symbol_index: usize,
-        keep_non_final: bool
+        keep_non_final: bool,
     ) -> Vec<(bool, bool, FSTState)> {
         let mut result = vec![];
         self._run_fst(
@@ -2461,9 +2491,155 @@ impl FST {
             post_input_advance,
             &mut result,
             input_symbol_index,
-            keep_non_final
+            keep_non_final,
         );
         result
+    }
+
+    fn expand_epsilons(&self, states: Vec<FSTState>, input_symbol_index: usize) -> Vec<FSTState> {
+        let mut new_states = states;
+        let mut states = vec![];
+
+        while !new_states.is_empty() {
+            let mut new_new_states: Vec<FSTState> = vec![];
+            for state in new_states.iter() {
+                if let Some(rules) = self.rules.get(&state.state_num) {
+                    for (isym, rulebook) in rules.iter() {
+                        if !isym.is_epsilon() {
+                            break; // Trust that the order of the FST guarantees us this
+                        }
+                        if let Some(input_flags) = _update_flags(isym, &state.input_flags.0) {
+                            for (target_state, osym, weight) in rulebook.iter() {
+                                if let Some(output_flags) =
+                                    _update_flags(osym, &state.output_flags.0)
+                                {
+                                    let new_symbol_mappings = FSTLinkedList::Some(
+                                        (osym.clone(), input_symbol_index),
+                                        Arc::new(state.symbol_mappings.clone()),
+                                    );
+                                    new_new_states.push(FSTState {
+                                        state_num: *target_state,
+                                        path_weight: state.path_weight + weight,
+                                        input_flags: FlagMap(input_flags.clone()),
+                                        output_flags: FlagMap(output_flags),
+                                        symbol_mappings: new_symbol_mappings,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            states.extend(new_states);
+            new_states = new_new_states;
+        }
+        states.extend(new_states);
+        states
+    }
+
+    pub fn lookup2(
+        &self,
+        input: &str,
+        state: FSTState,
+        allow_unknown: bool,
+    ) -> KFSTResult<Vec<(String, f64)>> {
+        let input_symbols = self.split_to_symbols(input, allow_unknown);
+        match input_symbols {
+            None => tokenization_exception(format!("Input cannot be split into symbols: {input}")),
+            Some(input_symbols) => {
+                let mut states = self.expand_epsilons(vec![state], 0);
+                for (isym_index, isym) in input_symbols.into_iter().enumerate() {
+                    let mut new_states: Vec<FSTState> = vec![];
+                    for state in states.into_iter() {
+                        if let Some(transitions) = self.rules.get(&state.state_num) {
+                            if let Some(rulebook) = transitions.get(&isym) {
+                                assert!(!matches!(isym, Symbol::Flag(_))); // That would just be silly
+                                for (target_state, output_sym, weight) in rulebook {
+                                    if let Some(output_flags) =
+                                        _update_flags(output_sym, &state.output_flags.0)
+                                    {
+                                        let new_symbol_mappings = FSTLinkedList::Some(
+                                            (output_sym.clone(), isym_index),
+                                            Arc::new(state.symbol_mappings.clone()),
+                                        );
+                                        new_states.push(FSTState {
+                                            state_num: *target_state,
+                                            path_weight: state.path_weight + weight,
+                                            // Safe not to update top flags
+                                            // We know that we don't have an input flag
+                                            input_flags: state.input_flags.clone(),
+                                            output_flags: FlagMap(output_flags),
+                                            symbol_mappings: new_symbol_mappings,
+                                        });
+                                    }
+                                }
+                            }
+                            if isym.is_unknown() {
+                                // Treat unknown and identity (aargh, O(n) lookup)
+                                for (transition_isym, rulebook) in transitions.iter() {
+                                    match transition_isym {
+                                        Symbol::Special(SpecialSymbol::IDENTITY) => {
+                                            for (target_state, output_sym, weight) in rulebook {
+                                                assert!(*output_sym == Symbol::Special(SpecialSymbol::IDENTITY));
+                                                let new_symbol_mappings = FSTLinkedList::Some(
+                                                    (isym.clone(), isym_index),
+                                                    Arc::new(state.symbol_mappings.clone()),
+                                                );
+                                                new_states.push(FSTState {
+                                                    state_num: *target_state,
+                                                    path_weight: state.path_weight + weight,
+                                                    // Safe not to update flags at all
+                                                    // We know that we are at IDENTITY:IDENTITY
+                                                    input_flags: state.input_flags.clone(),
+                                                    output_flags: state.output_flags.clone(),
+                                                    symbol_mappings: new_symbol_mappings,
+                                                });
+                                            }
+                                        },
+                                        Symbol::Special(SpecialSymbol::UNKNOWN) => {
+                                            for (target_state, output_sym, weight) in rulebook {
+                                                if let Some(output_flags) =
+                                                    _update_flags(output_sym, &state.output_flags.0)
+                                                {
+                                                    let new_symbol_mappings = FSTLinkedList::Some(
+                                                        (output_sym.clone(), isym_index),
+                                                        Arc::new(state.symbol_mappings.clone()),
+                                                    );
+                                                    new_states.push(FSTState {
+                                                        state_num: *target_state,
+                                                        path_weight: state.path_weight + weight,
+                                                        // Safe not to update top flags
+                                                        // We know that we are at UNKNOWN:xxx
+                                                        input_flags: state.input_flags.clone(),
+                                                        output_flags: FlagMap(output_flags),
+                                                        symbol_mappings: new_symbol_mappings,
+                                                    });
+                                                }
+                                            }
+                                        },
+                                        _ => ()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    states = self.expand_epsilons(new_states, isym_index);
+                }
+                // Now we have a final set of states
+                let mut result: Vec<(String, f64)> = vec![];
+                for state in states {
+                    if self.final_states.contains_key(&state.state_num) {
+                        result.push((
+                            state.symbol_mappings.to_vec().into_iter().filter(|sym| !sym.0.is_epsilon()).map(|sym| sym.0.get_symbol()).collect(),
+                            state.path_weight + self.final_states[&state.state_num]
+                        ));
+                    }
+                }
+                result.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap().then(a.0.cmp(&b.0)));
+                result.dedup();
+                Ok(result)
+            }
+        }
     }
 
     #[cfg(not(feature = "python"))]
@@ -2480,14 +2656,14 @@ impl FST {
         state: FSTState,
         post_input_advance: bool,
         input_symbol_index: Option<usize>,
-        keep_non_final: bool
+        keep_non_final: bool,
     ) -> Vec<(bool, bool, FSTState)> {
         self.__run_fst(
             input_symbols,
             state,
             post_input_advance,
             input_symbol_index.unwrap_or(0),
-            keep_non_final
+            keep_non_final,
         )
     }
 
@@ -2503,8 +2679,8 @@ impl FST {
             Some(input_symbols) => {
                 let mut dedup: IndexSet<String> = IndexSet::new();
                 let mut result: Vec<(String, f64)> = vec![];
-                let mut finished_paths: Vec<_> = self
-                    .run_fst(input_symbols.clone(), state, false, None, false);
+                let mut finished_paths: Vec<_> =
+                    self.run_fst(input_symbols.clone(), state, false, None, false);
                 finished_paths
                     .sort_by(|a, b| a.2.path_weight.partial_cmp(&b.2.path_weight).unwrap());
                 for finished in finished_paths {
@@ -2548,7 +2724,13 @@ impl FST {
                 finished_paths
                     .sort_by(|a, b| a.2.path_weight.partial_cmp(&b.2.path_weight).unwrap());
                 for finished in finished_paths {
-                    let output_vec: Vec<(usize, Symbol)> = finished.2.symbol_mappings.to_vec().into_iter().map(|(a, b)| (b, a)).collect();
+                    let output_vec: Vec<(usize, Symbol)> = finished
+                        .2
+                        .symbol_mappings
+                        .to_vec()
+                        .into_iter()
+                        .map(|(a, b)| (b, a))
+                        .collect();
                     if dedup.contains(&output_vec) {
                         continue;
                     }
@@ -2574,7 +2756,7 @@ impl FST {
         state: FSTState,
         allow_unknown: bool,
     ) -> KFSTResult<Vec<(String, f64)>> {
-        self._lookup(input, state, allow_unknown)
+        self.lookup2(input, state, allow_unknown)
     }
 
     #[cfg(not(feature = "python"))]
@@ -2915,14 +3097,14 @@ impl FST {
         state: FSTState,
         post_input_advance: bool,
         input_symbol_index: Option<usize>,
-        keep_non_final: bool
+        keep_non_final: bool,
     ) -> Vec<(bool, bool, FSTState)> {
         self.__run_fst(
             input_symbols,
             state,
             post_input_advance,
             input_symbol_index.unwrap_or(0),
-            keep_non_final
+            keep_non_final,
         )
     }
 
@@ -3121,14 +3303,16 @@ fn test_kfst_voikko() {
 #[test]
 fn test_kfst_voikko_lentää() {
     let fst = FST::_from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
+    let mut sys =         fst.lookup("lentää", FSTState::_new(0), false).unwrap();
+    sys.sort_by(|a, b| a.partial_cmp(b).unwrap());
     assert_eq!(
-        fst.lookup("lentää", FSTState::_new(0), false).unwrap(),
+        sys,
         vec![
+            ("[Lt][Xp]lentää[X]len[Tn1][Eb]tää".to_string(), 0.0),
             (
                 "[Lt][Xp]lentää[X]len[Tt][Ap][P3][Ny][Ef]tää".to_string(),
                 0.0
-            ),
-            ("[Lt][Xp]lentää[X]len[Tn1][Eb]tää".to_string(), 0.0)
+            )
         ]
     );
 }
@@ -3335,11 +3519,14 @@ fn test_kfst_voikko_paragraph() {
     ];
     let fst = FST::_from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
     for (idx, (word, gold)) in words.into_iter().zip(gold.into_iter()).enumerate() {
-        let sys = fst.lookup(word, FSTState::_new(0), false).unwrap();
+        let mut sys = fst.lookup(word, FSTState::_new(0), false).unwrap();
+        sys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut gold_sorted = gold;
+        gold_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
         println!("Word at: {}", idx);
         assert_eq!(
             sys,
-            gold.iter()
+            gold_sorted.iter()
                 .map(|(s, w)| (s.to_string(), (*w).into()))
                 .collect::<Vec<_>>()
         );
@@ -3378,7 +3565,10 @@ fn test_simple_unknown() {
                 path_weight: 0.0,
                 input_flags: FlagMap(im::HashMap::new()),
                 output_flags: FlagMap(im::HashMap::new()),
-                symbol_mappings: FSTLinkedList::Some((Symbol::String(StringSymbol::new("y".to_string(), false)), 0), Arc::new(FSTLinkedList::None))
+                symbol_mappings: FSTLinkedList::Some(
+                    (Symbol::String(StringSymbol::new("y".to_string(), false)), 0),
+                    Arc::new(FSTLinkedList::None)
+                )
             }
         )]
     );
@@ -3416,7 +3606,10 @@ fn test_simple_identity() {
                 path_weight: 0.0,
                 input_flags: FlagMap(im::HashMap::new()),
                 output_flags: FlagMap(im::HashMap::new()),
-                symbol_mappings: FSTLinkedList::Some((Symbol::String(StringSymbol::new("x".to_string(), true)), 0), Arc::new(FSTLinkedList::None))
+                symbol_mappings: FSTLinkedList::Some(
+                    (Symbol::String(StringSymbol::new("x".to_string(), true)), 0),
+                    Arc::new(FSTLinkedList::None)
+                )
             }
         )]
     );
@@ -3471,13 +3664,21 @@ fn test_raw_symbols() {
         FSTState::_new(0),
         false,
         None,
-        true
+        true,
     );
     let filtered: Vec<_> = result.into_iter().filter(|x| x.0).collect();
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].2.state_num, 3);
     assert_eq!(
-        filtered[0].2.symbol_mappings.clone().to_vec().iter().into_iter().map(|x| x.0.clone()).collect::<Vec<_>>(),
+        filtered[0]
+            .2
+            .symbol_mappings
+            .clone()
+            .to_vec()
+            .iter()
+            .into_iter()
+            .map(|x| x.0.clone())
+            .collect::<Vec<_>>(),
         vec![
             sym_a.clone(),
             sym_b.clone(),
