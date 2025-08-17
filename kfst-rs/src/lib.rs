@@ -1404,16 +1404,21 @@ impl FromPyObject<'_> for Symbol {
 /// name and value are interned string indices.
 pub struct FlagMap(Vec<(u32, bool, u32)>);
 
-
 impl FromIterator<(String, (bool, String))> for FlagMap {
     fn from_iter<T: IntoIterator<Item = (String, (bool, String))>>(iter: T) -> Self {
-        let mut vals: Vec<_> = iter.into_iter().map(|(a, (b, c))| (intern(a), b, intern(c))).collect();
+        let mut vals: Vec<_> = iter
+            .into_iter()
+            .map(|(a, (b, c))| (intern(a), b, intern(c)))
+            .collect();
         vals.sort();
         FlagMap(vals)
     }
 }
 
-impl<T> From<T> for FlagMap where T: IntoIterator<Item=(String, (bool, String))> {
+impl<T> From<T> for FlagMap
+where
+    T: IntoIterator<Item = (String, (bool, String))>,
+{
     fn from(value: T) -> Self {
         FlagMap::from_iter(value.into_iter())
     }
@@ -1437,12 +1442,11 @@ impl FlagMap {
 
     fn get(&self, flag: u32) -> Option<(bool, u32)> {
         let pp = self.0.partition_point(|v| v.0 < flag);
-        if pp < self.0.len() && self.0[pp].0 == flag{
+        if pp < self.0.len() && self.0[pp].0 == flag {
             Some((self.0[pp].1, self.0[pp].2))
         } else {
             None
         }
-
     }
 
     fn insert(&self, flag: u32, value: (bool, u32)) -> FlagMap {
@@ -1604,7 +1608,10 @@ impl FSTState {
         output_flags: F,
         output_symbols: Vec<Symbol>,
         input_indices: Vec<usize>,
-    ) -> Self where F: Into<FlagMap>{
+    ) -> Self
+    where
+        F: Into<FlagMap>,
+    {
         FSTState {
             state_num: state,
             path_weight,
@@ -1625,7 +1632,10 @@ impl FSTState {
         output_flags: F,
         output_symbols: Vec<Symbol>,
         input_indices: Vec<usize>,
-    ) -> Self where F: Into<FlagMap> {
+    ) -> Self
+    where
+        F: Into<FlagMap>,
+    {
         FSTState::__new(
             state_num,
             path_weight,
@@ -1777,8 +1787,10 @@ fn escape_att_symbol(symbol: &str) -> String {
 pub struct FST {
     /// A mapping from the index of a final state to its weight.
     pub final_states: IndexMap<u64, f64>,
-    /// The transition rules of this FST: (state number -> (top symbol -> list of target state indices, bottom symbols and weights))
-    pub rules: IndexMap<u64, IndexMap<Symbol, Vec<(u64, Symbol, f64)>>>,
+    /// The transition rules of this FST as a list of tuples
+    /// To be searchable, it is strategically sorted
+    pub rules: Vec<(u64, Symbol, u64, Symbol, f64)>,
+    pub node_locators: Vec<usize>,
     /// List of all the symbols in the transducer (useful for tokenization). Sorted in reverse order by length.
     pub symbols: Vec<Symbol>,
     /// Whether this FST is in debug mode; kept for compatibility with the python implementation of KFST. It's effects on FST behaviour are undefined.
@@ -1787,6 +1799,91 @@ pub struct FST {
 }
 
 impl FST {
+    fn _locate_transitions<'a>(
+        top_symbol: &Symbol,
+        range: &'a [(u64, Symbol, u64, Symbol, f64)],
+    ) -> &'a [(u64, Symbol, u64, Symbol, f64)] {
+        let left = range.partition_point(|s: &(u64, Symbol, u64, Symbol, f64)| {
+            top_symbol
+                .is_epsilon()
+                .cmp(&s.1.is_epsilon())
+                .then(s.1.cmp(top_symbol))
+                == Ordering::Less
+        });
+        if range.get(left).map(|x| &x.1) != Some(top_symbol) {
+            return &[];
+        }
+        let remaining = &range[left..];
+        let right = remaining.partition_point(|s: &(u64, Symbol, u64, Symbol, f64)| {
+            top_symbol
+                .is_epsilon()
+                .cmp(&s.1.is_epsilon())
+                .then(s.1.cmp(top_symbol))
+                != Ordering::Greater
+        });
+        let result = &remaining[..right];
+        result
+    }
+
+    fn _locate_node(&self, node: u64) -> &[(u64, Symbol, u64, Symbol, f64)] {
+        if node as usize >= self.node_locators.len() {
+            return &[]
+        }
+        let left = self.node_locators[node as usize];
+        if self.rules[left].0 != node {
+            return &[]
+        }
+        let right = if (node as usize) < self.node_locators.len() - 1 { self.node_locators[node as usize + 1] } else { self.rules.len() };
+        &self.rules[left..right]
+    }
+
+    fn __locate_node(&self, node: u64) -> &[(u64, Symbol, u64, Symbol, f64)] {
+        // Find start index, while continuously bracketing the end index
+
+        // Pain-in-the-ass: this should be the index _before_ the equal range + 1
+        // ie. if we want 2 and we have [0, 2, 2, 3], it should be the index of the zero (ie. 0) + 1 = 1
+        // if our list was [2, 2, 3] it should be one before the list (-1) +1 = 0
+        // This boils down to the index of the first element of our range
+        let mut left_bound: usize = 0;
+        let mut right_bound_bounds = 0..self.rules.len();
+        let mut jump = self.rules.len() / 2;
+        while jump > 0 {
+            match self
+                .rules
+                .get(left_bound + jump - 1)
+                .map(|n| node.cmp(&n.0))
+                .unwrap_or(Ordering::Less)
+            {
+                Ordering::Less => {
+                    right_bound_bounds = right_bound_bounds.start
+                        ..usize::min(left_bound + jump - 1, right_bound_bounds.end);
+                }
+                Ordering::Equal => {
+                    right_bound_bounds = usize::max(right_bound_bounds.start, left_bound + jump - 1)
+                        ..right_bound_bounds.end;
+                }
+                Ordering::Greater => {
+                    right_bound_bounds = usize::max(right_bound_bounds.start, left_bound + jump - 1)
+                        ..right_bound_bounds.end;
+                    left_bound += jump;
+                }
+            }
+            jump /= 2;
+        }
+
+        // Did we have a hit at all?
+
+        if self.rules.get(left_bound).map(|x| x.0) != Some(node) {
+            return &[];
+        }
+
+        // Ok there is at least one item, so when is the end of the range we want?
+
+        let right_bound = self.rules[right_bound_bounds].partition_point(|n| n.0 <= node);
+
+        &self.rules[left_bound..right_bound]
+    }
+
     fn _run_fst(
         &self,
         input_symbols: &[Symbol],
@@ -1796,7 +1893,7 @@ impl FST {
         input_symbol_index: usize,
         keep_non_final: bool,
     ) {
-        let transitions = self.rules.get(&state.state_num);
+        let transitions = self._locate_node(state.state_num);
         let isymbol = if input_symbols.len() - input_symbol_index == 0 {
             match self.final_states.get(&state.state_num) {
                 Some(&weight) => {
@@ -1824,27 +1921,69 @@ impl FST {
         } else {
             Some(&input_symbols[input_symbol_index])
         };
-        if let Some(transitions) = transitions {
-            for transition_isymbol in transitions.keys() {
-                if transition_isymbol.is_epsilon() || isymbol == Some(transition_isymbol) {
-                    self._transition(
+        if transitions.len() > 0 {
+            // Epsilons
+
+            let mut i = 0;
+            while i < transitions.len() && transitions[i].1.is_epsilon() {
+                self._transition2(
+                    input_symbols,
+                    input_symbol_index,
+                    state,
+                    &transitions[i..i + 1],
+                    isymbol,
+                    &transitions[i].1,
+                    result,
+                    keep_non_final,
+                );
+                i += 1;
+            }
+
+            // We can narrow our search range further
+
+            let transitions = &transitions[i..];
+
+            if let Some(isymbol) = isymbol {
+                // Equalities
+
+                // SAFETY: we know that there is no epsilon risk because we have narrowed the range
+                let mut first_idx = 0;
+                while first_idx < transitions.len() && &transitions[first_idx].1 != isymbol {
+                    first_idx += 1;
+                }
+
+                
+                //transitions.partition_point(|s| &s.1 < isymbol);
+
+                let mut last_idx = first_idx;
+                while last_idx < transitions.len() && &transitions[last_idx].1 == isymbol {
+                    last_idx += 1;
+                }
+
+                let equal_range = &transitions[first_idx..last_idx];
+
+                if equal_range != &[] {
+                    self._transition2(
                         input_symbols,
                         input_symbol_index,
                         state,
-                        &transitions[transition_isymbol],
+                        equal_range,
+                        Some(isymbol),
                         isymbol,
-                        transition_isymbol,
                         result,
                         keep_non_final,
                     );
                 }
-            }
-            if let Some(isymbol) = isymbol {
+
+                // Unknown cases
+
                 if isymbol.is_unknown() {
-                    if let Some(transition_list) =
-                        transitions.get(&Symbol::Special(SpecialSymbol::UNKNOWN))
-                    {
-                        self._transition(
+                    let transition_list = FST::_locate_transitions(
+                        &Symbol::Special(SpecialSymbol::UNKNOWN),
+                        transitions,
+                    );
+                    if transition_list.len() > 0 {
+                        self._transition2(
                             input_symbols,
                             input_symbol_index,
                             state,
@@ -1856,10 +1995,12 @@ impl FST {
                         );
                     }
 
-                    if let Some(transition_list) =
-                        transitions.get(&Symbol::Special(SpecialSymbol::IDENTITY))
-                    {
-                        self._transition(
+                    let transition_list = FST::_locate_transitions(
+                        &Symbol::Special(SpecialSymbol::IDENTITY),
+                        transitions,
+                    );
+                    if transition_list.len() > 0 {
+                        self._transition2(
                             input_symbols,
                             input_symbol_index,
                             state,
@@ -1932,6 +2073,75 @@ impl FST {
         }
     }
 
+    fn _transition2(
+        &self,
+        input_symbols: &[Symbol],
+        input_symbol_index: usize,
+        state: &FSTState,
+        transitions: &[(u64, Symbol, u64, Symbol, f64)],
+        isymbol: Option<&Symbol>,
+        transition_isymbol: &Symbol,
+        result: &mut Vec<(bool, bool, FSTState)>,
+        keep_non_final: bool,
+    ) {
+        for (_, _, next_state, osymbol, weight) in transitions.iter() {
+            let new_output_flags = _update_flags(osymbol, &state.output_flags);
+            let new_input_flags = _update_flags(transition_isymbol, &state.input_flags);
+
+            match (new_output_flags, new_input_flags) {
+                (Some(new_output_flags), Some(new_input_flags)) => {
+                    let new_osymbol = match (isymbol, osymbol) {
+                        (Some(isymbol), Symbol::Special(SpecialSymbol::IDENTITY)) => isymbol,
+                        _ => osymbol,
+                    };
+                    let new_symbol_mapping: FSTLinkedList = FSTLinkedList::Some(
+                        (new_osymbol.clone(), input_symbol_index),
+                        Arc::new(state.symbol_mappings.clone()),
+                    );
+                    let new_state = FSTState {
+                        state_num: *next_state,
+                        path_weight: state.path_weight + *weight,
+                        input_flags: new_input_flags,
+                        output_flags: new_output_flags,
+                        symbol_mappings: new_symbol_mapping,
+                    };
+                    if transition_isymbol.is_epsilon() {
+                        self._run_fst(
+                            input_symbols,
+                            &new_state,
+                            input_symbols.is_empty(),
+                            result,
+                            input_symbol_index,
+                            keep_non_final,
+                        );
+                    } else {
+                        self._run_fst(
+                            input_symbols,
+                            &new_state,
+                            false,
+                            result,
+                            input_symbol_index + 1,
+                            keep_non_final,
+                        );
+                    }
+                }
+                _ => continue,
+            }
+        }
+    }
+
+    fn build_node_locators(rules: &[(u64, Symbol, u64, Symbol, f64)]) -> Vec<usize> {
+        let mut result = vec![];
+        let mut prev_plus_1: u64 = 0;
+        for i in 0..rules.len() {
+            for _ in 0..(rules[i].0 + 1 - prev_plus_1) {
+                result.push(i);
+            }
+            prev_plus_1 = rules[i].0+1;
+        }
+        result
+    }
+
     /// Construct an instance of FST from of rows matching those in an att file (see [FST::from_att_code]) that have been parsed into tuples.
     /// Thee representation is read:
     /// ```no_test
@@ -1944,20 +2154,17 @@ impl FST {
         debug: bool,
     ) -> FST {
         let mut final_states: IndexMap<u64, f64> = IndexMap::new();
-        let mut rules: IndexMap<u64, IndexMap<Symbol, Vec<(u64, Symbol, f64)>>> = IndexMap::new();
         let mut symbols: IndexSet<Symbol> = IndexSet::new();
+        let mut rules: Vec<(u64, Symbol, u64, Symbol, f64)> = vec![];
         for line in rows.into_iter() {
             match line {
                 Ok((state_number, state_weight)) => {
                     final_states.insert(state_number, state_weight);
                 }
                 Err((state_1, state_2, top_symbol, bottom_symbol, weight)) => {
-                    rules.entry(state_1).or_default();
-                    let handle = rules.get_mut(&state_1).unwrap();
-                    if !handle.contains_key(&top_symbol) {
-                        handle.insert(top_symbol.clone(), vec![]);
-                    }
-                    handle.get_mut(&top_symbol).unwrap().push((
+                    rules.push((
+                        state_1,
+                        top_symbol.clone(),
                         state_2,
                         bottom_symbol.clone(),
                         weight,
@@ -1967,12 +2174,23 @@ impl FST {
                 }
             }
         }
-        FST::from_rules(
-            final_states,
-            rules,
-            symbols.into_iter().collect(),
-            Some(debug),
-        )
+        rules.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then(b.1.is_epsilon().cmp(&a.1.is_epsilon()))
+                .then(a.1.cmp(&b.1))
+                .then(a.2.cmp(&b.2))
+                .then(a.3.cmp(&b.3))
+                .then(a.4.partial_cmp(&b.4).unwrap())
+        });
+        let mut new_symbols: Vec<Symbol> = symbols.into_iter().collect();
+        new_symbols.sort();
+        FST {
+            final_states: final_states,
+            node_locators: FST::build_node_locators(&rules),
+            rules: rules,
+            symbols: new_symbols,
+            debug: debug,
+        }
     }
 
     fn _from_kfst_bytes(kfst_bytes: &[u8]) -> Result<FST, String> {
@@ -2132,19 +2350,11 @@ impl FST {
             }
         }
 
-        let mut transitions: u32 = 0;
-
-        for (_, transition_table) in self.rules.iter() {
-            for transition in transition_table.values() {
-                for (_, _, weight) in transition.iter() {
-                    if (*weight) != 0.0 {
-                        weighted = true;
-                    }
-                    transitions += 1;
-                }
+        for transition in self.rules.iter() {
+            if (transition.4) != 0.0 {
+                weighted = true;
             }
         }
-
         // Construct header
 
         let mut result: Vec<u8> = "KFST".into();
@@ -2155,7 +2365,7 @@ impl FST {
             .try_into()
             .map_err(|x| format!("Too many symbols to represent as u16: {x}"))?;
         result.extend(symbol_len.to_be_bytes());
-        result.extend(transitions.to_be_bytes());
+        result.extend((self.rules.len() as u32).to_be_bytes());
         let num_states: u32 = self
             .final_states
             .len()
@@ -2179,45 +2389,37 @@ impl FST {
 
         // Push transition table to compressible buffer
 
-        for (source_state, transition_table) in self.rules.iter() {
-            for (top_symbol, transition) in transition_table.iter() {
-                for (target_state, bottom_symbol, weight) in transition.iter() {
-                    let source_state: u32 = (*source_state).try_into().map_err(|x| {
-                        format!("Can't represent source state {source_state} as u32: {x}")
-                    })?;
-                    let target_state: u32 = (*target_state).try_into().map_err(|x| {
-                        format!("Can't represent target state {target_state} as u32: {x}")
-                    })?;
-                    let top_index: u16 = sorted_syms
-                        .binary_search(&top_symbol)
-                        .map_err(|_| {
-                            format!("Top symbol {top_symbol:?} not found in FST symbol list")
-                        })
-                        .and_then(|x| {
-                            x.try_into().map_err(|x| {
-                                format!("Can't represent top symbol index as u16: {x}")
-                            })
-                        })?;
-                    let bottom_index: u16 = sorted_syms
-                        .binary_search(&bottom_symbol)
-                        .map_err(|_| {
-                            format!("Bottom symbol {bottom_symbol:?} not found in FST symbol list")
-                        })
-                        .and_then(|x| {
-                            x.try_into().map_err(|x| {
-                                format!("Can't represent bottom symbol index as u16: {x}")
-                            })
-                        })?;
-                    to_compress.extend(source_state.to_be_bytes());
-                    to_compress.extend(target_state.to_be_bytes());
-                    to_compress.extend(top_index.to_be_bytes());
-                    to_compress.extend(bottom_index.to_be_bytes());
-                    if weighted {
-                        to_compress.extend(weight.to_be_bytes());
-                    } else {
-                        assert!(*weight == 0.0);
-                    }
-                }
+        for (source_state, top_symbol, target_state, bottom_symbol, weight) in self.rules.iter() {
+            let source_state: u32 = (*source_state)
+                .try_into()
+                .map_err(|x| format!("Can't represent source state {source_state} as u32: {x}"))?;
+            let target_state: u32 = (*target_state)
+                .try_into()
+                .map_err(|x| format!("Can't represent target state {target_state} as u32: {x}"))?;
+            let top_index: u16 = sorted_syms
+                .binary_search(&top_symbol)
+                .map_err(|_| format!("Top symbol {top_symbol:?} not found in FST symbol list"))
+                .and_then(|x| {
+                    x.try_into()
+                        .map_err(|x| format!("Can't represent top symbol index as u16: {x}"))
+                })?;
+            let bottom_index: u16 = sorted_syms
+                .binary_search(&bottom_symbol)
+                .map_err(|_| {
+                    format!("Bottom symbol {bottom_symbol:?} not found in FST symbol list")
+                })
+                .and_then(|x| {
+                    x.try_into()
+                        .map_err(|x| format!("Can't represent bottom symbol index as u16: {x}"))
+                })?;
+            to_compress.extend(source_state.to_be_bytes());
+            to_compress.extend(target_state.to_be_bytes());
+            to_compress.extend(top_index.to_be_bytes());
+            to_compress.extend(bottom_index.to_be_bytes());
+            if weighted {
+                to_compress.extend(weight.to_be_bytes());
+            } else {
+                assert!(*weight == 0.0);
             }
         }
 
@@ -2259,14 +2461,31 @@ impl FST {
         // That different-by-symbol-string symbols get treated differently
         new_symbols.sort();
         // Sort rules such that epsilons are at the start
-        let mut new_rules = IndexMap::new();
-        for (target_node, rulebook) in rules {
-            let mut new_rulebook = rulebook;
-            new_rulebook.sort_by(|a, _, b, _| b.is_epsilon().cmp(&a.is_epsilon()));
-            new_rules.insert(target_node, new_rulebook);
+        let mut new_rules = vec![];
+        for (source_state, t) in rules {
+            for (top_symbol, rulebook) in t {
+                for (target_state, bottom_symbol, weight) in rulebook {
+                    new_rules.push((
+                        source_state,
+                        top_symbol.clone(),
+                        target_state,
+                        bottom_symbol,
+                        weight,
+                    ));
+                }
+            }
         }
+        new_rules.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then(b.1.is_epsilon().cmp(&a.1.is_epsilon()))
+                .then(a.1.cmp(&b.1))
+                .then(a.2.cmp(&b.2))
+                .then(a.3.cmp(&b.3))
+                .then(a.4.partial_cmp(&b.4).unwrap())
+        });
         FST {
             final_states,
+            node_locators: FST::build_node_locators(&new_rules),
             rules: new_rules,
             symbols: new_symbols,
             debug: debug.unwrap_or(false),
@@ -2540,7 +2759,7 @@ impl FST {
         result
     }
 
-    fn expand_epsilons(&self, states: Vec<FSTState>, input_symbol_index: usize) -> Vec<FSTState> {
+    /*fn expand_epsilons(&self, states: Vec<FSTState>, input_symbol_index: usize) -> Vec<FSTState> {
         let mut new_states = states;
         let mut states = vec![];
 
@@ -2684,7 +2903,7 @@ impl FST {
                 Ok(result)
             }
         }
-    }
+    }*/
 
     #[cfg(not(feature = "python"))]
     /// Apply this FST to a sequence of symbols `input_symbols` starting from the state `state`.
@@ -2800,7 +3019,7 @@ impl FST {
         state: FSTState,
         allow_unknown: bool,
     ) -> KFSTResult<Vec<(String, f64)>> {
-        self.lookup2(input, state, allow_unknown)
+        self._lookup(input, state, allow_unknown)
     }
 
     #[cfg(not(feature = "python"))]
@@ -2879,10 +3098,7 @@ impl FST {
     }
 }
 
-fn _update_flags(
-    symbol: &Symbol,
-    flags: &FlagMap,
-) -> Option<FlagMap> {
+fn _update_flags(symbol: &Symbol, flags: &FlagMap) -> Option<FlagMap> {
     if let Symbol::Flag(flag_diacritic_symbol) = symbol {
         match flag_diacritic_symbol.flag_type {
             FlagDiacriticType::U => {
@@ -2891,8 +3107,7 @@ fn _update_flags(
                 // Is the current state somehow in conflict?
                 // It can be, if we are negatively set to what we try to unify to or we are positively set to sth else
 
-                if let Some((currently_set, current_value)) = flags.get(flag_diacritic_symbol.key)
-                {
+                if let Some((currently_set, current_value)) = flags.get(flag_diacritic_symbol.key) {
                     if (currently_set && current_value != value)
                         || (!currently_set && current_value == value)
                     {
@@ -2945,9 +3160,7 @@ fn _update_flags(
                     }
                 }
             }
-            FlagDiacriticType::C => {
-                Some(flags.remove(flag_diacritic_symbol.key))
-            }
+            FlagDiacriticType::C => Some(flags.remove(flag_diacritic_symbol.key)),
             FlagDiacriticType::P => {
                 let value = flag_diacritic_symbol.value;
                 Some(flags.insert(flag_diacritic_symbol.key, (true, value)))
@@ -3040,30 +3253,26 @@ impl FST {
                 }
             }
         }
-        for (from_state, rules) in self.rules.iter() {
-            for (top_symbol, transitions) in rules.iter() {
-                for (to_state, bottom_symbol, weight) in transitions.iter() {
-                    match weight {
-                        0.0 => {
-                            rows.push(format!(
-                                "{}\t{}\t{}\t{}",
-                                from_state,
-                                to_state,
-                                escape_att_symbol(&top_symbol.get_symbol()),
-                                escape_att_symbol(&bottom_symbol.get_symbol())
-                            ));
-                        }
-                        _ => {
-                            rows.push(format!(
-                                "{}\t{}\t{}\t{}\t{}",
-                                from_state,
-                                to_state,
-                                escape_att_symbol(&top_symbol.get_symbol()),
-                                escape_att_symbol(&bottom_symbol.get_symbol()),
-                                weight
-                            ));
-                        }
-                    }
+        for (from_state, top_symbol, to_state, bottom_symbol, weight) in self.rules.iter() {
+            match weight {
+                0.0 => {
+                    rows.push(format!(
+                        "{}\t{}\t{}\t{}",
+                        from_state,
+                        to_state,
+                        escape_att_symbol(&top_symbol.get_symbol()),
+                        escape_att_symbol(&bottom_symbol.get_symbol())
+                    ));
+                }
+                _ => {
+                    rows.push(format!(
+                        "{}\t{}\t{}\t{}\t{}",
+                        from_state,
+                        to_state,
+                        escape_att_symbol(&top_symbol.get_symbol()),
+                        escape_att_symbol(&bottom_symbol.get_symbol()),
+                        weight
+                    ));
                 }
             }
         }
@@ -3185,10 +3394,10 @@ impl FST {
     /// assert_eq!(fst.get_input_symbols(FSTState::new(1, 0.0, HashMap::new(), HashMap::new(), vec![], vec![])), HashSet::new());
     /// ```
     pub fn get_input_symbols(&self, state: FSTState) -> HashSet<Symbol> {
-        self.rules
-            .get(&state.state_num)
-            .map(|x| x.keys().cloned().collect())
-            .unwrap_or_default()
+        self._locate_node(state.state_num)
+            .into_iter()
+            .map(|x| x.1.clone())
+            .collect()
     }
 }
 
@@ -3338,7 +3547,7 @@ fn test_kfst_voikko() {
 #[test]
 fn test_kfst_voikko_lentää() {
     let fst = FST::_from_kfst_file("../pyvoikko/pyvoikko/voikko.kfst".to_string(), false).unwrap();
-    let mut sys =         fst.lookup("lentää", FSTState::_new(0), false).unwrap();
+    let mut sys = fst.lookup("lentää", FSTState::_new(0), false).unwrap();
     sys.sort_by(|a, b| a.partial_cmp(b).unwrap());
     assert_eq!(
         sys,
@@ -3561,7 +3770,8 @@ fn test_kfst_voikko_paragraph() {
         println!("Word at: {}", idx);
         assert_eq!(
             sys,
-            gold_sorted.iter()
+            gold_sorted
+                .iter()
                 .map(|(s, w)| (s.to_string(), (*w).into()))
                 .collect::<Vec<_>>()
         );
@@ -3680,12 +3890,12 @@ fn test_raw_symbols() {
         indexmap!(special_epsilon.clone() => vec![(3, sym_c.clone(), 0.0)]),
     );
     let symbols = vec![sym_a.clone(), sym_b.clone(), sym_c.clone(), special_epsilon];
-    let fst = FST {
-        final_states: indexmap! {3 => 0.0},
+    let fst = FST::from_rules(
+        indexmap! {3 => 0.0},
         rules,
-        symbols,
-        debug: false,
-    };
+        symbols.into_iter().collect(),
+        Some(false),
+    );
 
     // Accepting example that tests epsilon + unknown bits
 
