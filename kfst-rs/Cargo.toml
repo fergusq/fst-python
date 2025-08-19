@@ -16,7 +16,6 @@ name = "kfst_rs"
 crate-type = ["cdylib", "lib"]
 
 [dependencies]
-im = "15.1.0"
 indexmap = "2.9.0"
 nom = "8.0.0"
 pyo3 = { version = "0.24.0", features = ["indexmap", "abi3-py311", "generate-import-lib"], optional = true}
