@@ -68,16 +68,14 @@
 //! ```
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashSet};
 use std::fmt::Debug;
 #[cfg(feature = "python")]
 use std::fmt::Error;
 use std::fs::{self, File};
 use std::hash::Hash;
 use std::io::Read;
-use std::path::Path;
-use std::rc::Rc;
-use std::result;
+use std::path::{Path};
 
 use indexmap::{indexmap, IndexMap, IndexSet};
 use nom::branch::alt;
@@ -92,7 +90,7 @@ use pyo3::create_exception;
 #[cfg(feature = "python")]
 use pyo3::exceptions::{PyIOError, PyValueError};
 #[cfg(feature = "python")]
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyTuple};
 #[cfg(feature = "python")]
 use pyo3::{prelude::*, py_run, IntoPyObjectExt};
 
@@ -1402,8 +1400,11 @@ impl FromPyObject<'_> for Symbol {
 /// (name -> (direction of setting where true is positive, value))
 /// ```
 /// name and value are interned string indices.
+/// This is generally an immutable collection.
 pub struct FlagMap(Vec<(u32, bool, u32)>);
 
+/// Construct a FlagMap form an iterator
+/// Notably, an iterator over `(String, (bool, String))` is what `HashMap<String, (bool, String)>` offers.
 impl FromIterator<(String, (bool, String))> for FlagMap {
     fn from_iter<T: IntoIterator<Item = (String, (bool, String))>>(iter: T) -> Self {
         let mut vals: Vec<_> = iter
@@ -1415,6 +1416,8 @@ impl FromIterator<(String, (bool, String))> for FlagMap {
     }
 }
 
+/// Construct a FlagMap form an iterator
+/// Notably, an iterator over `(String, (bool, String))` is what can be collected into a `HashMap<String, (bool, String)>`.
 impl<T> From<T> for FlagMap
 where
     T: IntoIterator<Item = (String, (bool, String))>,
@@ -1425,11 +1428,14 @@ where
 }
 
 impl FlagMap {
-    fn new() -> FlagMap {
+
+    /// Create a new empty FlagMap
+    pub fn new() -> FlagMap {
         FlagMap(vec![])
     }
 
-    fn remove(&self, flag: u32) -> FlagMap {
+    /// Create a clone of this FlagMap with a specific flag removed
+    pub fn remove(&self, flag: u32) -> FlagMap {
         let pp = self.0.partition_point(|v| v.0 < flag);
         if pp < self.0.len() && self.0[pp].0 == flag {
             let mut new_vals = self.0.clone();
@@ -1440,7 +1446,8 @@ impl FlagMap {
         }
     }
 
-    fn get(&self, flag: u32) -> Option<(bool, u32)> {
+    /// Get the value and direction of setting of a flag or `None` if the flag is not set.
+    pub fn get(&self, flag: u32) -> Option<(bool, u32)> {
         let pp = self.0.partition_point(|v| v.0 < flag);
         if pp < self.0.len() && self.0[pp].0 == flag {
             Some((self.0[pp].1, self.0[pp].2))
@@ -1449,7 +1456,9 @@ impl FlagMap {
         }
     }
 
-    fn insert(&self, flag: u32, value: (bool, u32)) -> FlagMap {
+    /// Create a clone of this FlagMap with a specific flag inserted.
+    /// Overwrites a flag if it already exists.
+    pub fn insert(&self, flag: u32, value: (bool, u32)) -> FlagMap {
         let pp = self.0.partition_point(|v| v.0 < flag);
         let mut new_vals = self.0.clone();
         if pp == self.0.len() || self.0[pp].0 != flag {
@@ -1488,7 +1497,7 @@ impl<'py> IntoPyObject<'py> for FlagMap {
         let collection = self
             .0
             .into_iter()
-            .map(|(a, b, c)| (a, (b, c)))
+            .map(|(a, b, c)| (deintern(a), (b, deintern(c))))
             .collect::<Vec<_>>()
             .into_pyobject(py)?;
         let immutables = PyModule::import(py, "immutables")?;
@@ -1502,9 +1511,33 @@ impl<'py> IntoPyObject<'py> for FlagMap {
 // transducer.py
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+/// The linked list used to represent the transduction outputs.
+/// A linked list is used here, as the transduced sequences of states share prefixes
+/// It is internally in reverse order.
+/// the IntoIterator clones items into temporary storage. 
 pub enum FSTLinkedList {
     Some((Symbol, usize), Arc<FSTLinkedList>),
     None,
+}
+
+impl IntoIterator for FSTLinkedList {
+    type Item = (Symbol, usize);
+
+    type IntoIter = <Vec<<FSTLinkedList as IntoIterator>::Item> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.to_vec().into_iter()
+    }
+}
+
+impl FromIterator<(Symbol, usize)> for FSTLinkedList {
+    fn from_iter<T: IntoIterator<Item = (Symbol, usize)>>(iter: T) -> Self {
+        let mut symbol_mappings = FSTLinkedList::None;
+        for (symbol, input_index) in iter {
+            symbol_mappings = FSTLinkedList::Some((symbol, input_index), Arc::new(symbol_mappings));
+        }
+        symbol_mappings
+    }
 }
 
 impl FSTLinkedList {
@@ -1524,12 +1557,14 @@ impl FSTLinkedList {
     }
 
     fn from_vec(output_symbols: Vec<Symbol>, input_indices: Vec<usize>) -> FSTLinkedList {
-        // Convert vec to input_indices
-        let mut symbol_mappings = FSTLinkedList::None;
-        for (symbol, input_index) in output_symbols.into_iter().zip(input_indices.into_iter()) {
-            symbol_mappings = FSTLinkedList::Some((symbol, input_index), Arc::new(symbol_mappings));
+        if input_indices.len() == 0 {
+            output_symbols.into_iter().zip(std::iter::repeat(0)).collect()
+        } else if input_indices.len() == output_symbols.len() {
+            output_symbols.into_iter().zip(input_indices.into_iter()).collect()
+        } else {
+            panic!("Mismatch in input index and output symbol len: {} output symbols and {} input indices.", output_symbols.len(), input_indices.len());
         }
-        symbol_mappings
+        
     }
 }
 
@@ -1565,7 +1600,7 @@ pub struct FSTState {
     #[cfg(feature = "python")]
     #[pyo3(get)]
     pub output_flags: FlagMap,
-    /// Output side symbols for the transduction so far.
+    /// Output side symbols & alignments for the transduction so far.
     pub symbol_mappings: FSTLinkedList,
 }
 
@@ -1677,46 +1712,54 @@ impl FSTState {
 
     #[cfg(feature = "python")]
     #[getter]
-    fn output_symbols(&self) -> Vec<Symbol> {
-        self.symbol_mappings
-            .clone()
-            .to_vec()
-            .into_iter()
-            .rev()
-            .map(|x| x.0)
-            .collect()
+    fn output_symbols<'a>(&'a self, py: Python<'a>) -> Result<Bound<'a, PyTuple>, PyErr> {
+        PyTuple::new(py, self.symbol_mappings.clone().into_iter()
+            .map(|x| x.0.clone()))
     }
 
     #[cfg(feature = "python")]
     #[getter]
-    fn input_indices(&self) -> Vec<usize> {
-        self.symbol_mappings
-            .clone()
-            .to_vec()
-            .into_iter()
-            .rev()
-            .map(|x| x.1)
-            .collect()
+    fn input_indices<'a>(&'a self, py: Python<'a>) -> Result<Bound<'a, PyTuple>, PyErr> {
+        PyTuple::new(py, self.symbol_mappings.clone().into_iter()
+            .map(|x| x.1))
     }
 
     #[cfg(not(feature = "python"))]
-    fn output_symbols(&self) -> Vec<Symbol> {
-        self.symbol_mappings
-            .clone()
-            .to_vec()
-            .into_iter()
-            .rev()
+    /// Return the output symbols for this state. Internally, they are (as of now) stored in a [FSTLinkedList]. Calling this method reconstructs a vector.
+    /// ```rust
+    /// use kfst_rs::{FSTState, FlagMap, Symbol, SpecialSymbol};
+    /// 
+    /// let output_symbols = vec![
+    ///     Symbol::Special(SpecialSymbol::EPSILON),
+    ///     Symbol::Special(SpecialSymbol::UNKNOWN),
+    ///     Symbol::Special(SpecialSymbol::IDENTITY)
+    /// ];
+    /// // The actual alignment (last argument ie. input_indices) here is nonsensical
+    /// let state = FSTState::new(0, 0.0, FlagMap::new(), FlagMap::new(), output_symbols.clone(), vec![10, 20, 30]);
+    // assert!(state.output_symbols() == orig);
+    /// ```
+    pub fn output_symbols(&self) -> Vec<Symbol> {
+        self.symbol_mappings.clone().into_iter()
             .map(|x| x.0)
             .collect()
     }
 
     #[cfg(not(feature = "python"))]
-    fn input_indices(&self) -> Vec<usize> {
-        self.symbol_mappings
-            .clone()
-            .to_vec()
-            .into_iter()
-            .rev()
+    /// Return the output symbols for this state. Internally, they are (as of now) stored in a [FSTLinkedList]. Calling this method reconstructs a vector.
+    /// ```rust
+    /// use kfst_rs::{FSTState, FlagMap, Symbol, SpecialSymbol};
+    /// 
+    /// let output_symbols = vec![
+    ///     Symbol::Special(SpecialSymbol::EPSILON),
+    ///     Symbol::Special(SpecialSymbol::UNKNOWN),
+    ///     Symbol::Special(SpecialSymbol::IDENTITY)
+    /// ];
+    /// // The actual alignment (last argument ie. input_indices) here is nonsensical
+    /// let state = FSTState::new(0, 0.0, FlagMap::new(), FlagMap::new(), output_symbols.clone(), vec![10, 20, 30]);
+    // assert!(state.input_indices() == vec![10, 20, 30]);
+    /// ```
+    pub fn input_indices(&self) -> Vec<usize> {
+        self.symbol_mappings.clone().into_iter()
             .map(|x| x.1)
             .collect()
     }
@@ -1730,8 +1773,8 @@ impl FSTState {
             self.path_weight,
             self.input_flags,
             self.output_flags,
-            self.output_symbols(),
-            self.input_indices()
+            self.symbol_mappings.clone().into_iter().map(|x| x.0).collect::<Vec<_>>(),
+            self.symbol_mappings.clone().into_iter().map(|x| x.1).collect::<Vec<_>>()
         )
     }
 }
@@ -3622,6 +3665,45 @@ fn test_string_comparison_order_for_tokenizable_symbol_types() {
             > FlagDiacriticSymbol::parse("@U.aa@").unwrap()
     );
     assert!(SpecialSymbol::IDENTITY < SpecialSymbol::EPSILON); // "@0@" is the shorter string
+}
+
+#[test]
+fn fst_linked_list_conversion_correctness_internal_methods() {
+    let orig = vec![
+        Symbol::Special(SpecialSymbol::EPSILON),
+        Symbol::Special(SpecialSymbol::IDENTITY),
+        Symbol::Special(SpecialSymbol::UNKNOWN)
+    ];
+    assert!(
+        FSTLinkedList::from_vec(orig.clone(), vec![10, 20, 30]).to_vec() ==
+        vec![
+            (Symbol::Special(SpecialSymbol::EPSILON), 10),
+            (Symbol::Special(SpecialSymbol::IDENTITY), 20),
+            (Symbol::Special(SpecialSymbol::UNKNOWN), 30),
+        ]);
+
+    assert!(
+        FSTLinkedList::from_vec(orig.clone(), vec![]).to_vec() ==
+        vec![
+            (Symbol::Special(SpecialSymbol::EPSILON), 0),
+            (Symbol::Special(SpecialSymbol::IDENTITY), 0),
+            (Symbol::Special(SpecialSymbol::UNKNOWN), 0),
+        ]);
+}
+
+#[test]
+fn fst_linked_list_conversion_correctness_iterators_with_indices() {
+    let orig = vec![
+        (Symbol::Special(SpecialSymbol::EPSILON), 10),
+        (Symbol::Special(SpecialSymbol::IDENTITY), 20),
+        (Symbol::Special(SpecialSymbol::UNKNOWN), 30)
+    ];
+    let ll: FSTLinkedList = orig.clone().into_iter().collect();
+    assert!(ll.into_iter().collect::<Vec<_>>() == vec![
+            (Symbol::Special(SpecialSymbol::EPSILON), 10),
+            (Symbol::Special(SpecialSymbol::IDENTITY), 20),
+            (Symbol::Special(SpecialSymbol::UNKNOWN), 30),
+    ]);
 }
 
 /// A Python module implemented in Rust.
