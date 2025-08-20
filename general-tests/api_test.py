@@ -139,4 +139,14 @@ for k in [kfst, kfst_py]:
         output_symbols=(kfst.symbols.SpecialSymbol.EPSILON, kfst.symbols.SpecialSymbol.UNKNOWN, kfst.symbols.SpecialSymbol.IDENTITY),
     ).output_symbols == (kfst.symbols.SpecialSymbol.EPSILON, kfst.symbols.SpecialSymbol.UNKNOWN, kfst.symbols.SpecialSymbol.IDENTITY)
 
+    assert kfst.transducer.FSTState(
+        state_num=3,
+        path_weight=12.5,
+        input_flags=Map({"x": (True, "y")}),
+        output_flags=Map({"u": (True, "v")}),
+        output_symbols=(kfst.symbols.SpecialSymbol.EPSILON, kfst.symbols.SpecialSymbol.UNKNOWN, kfst.symbols.SpecialSymbol.IDENTITY),
+        input_indices=(10, 20, 30),
+    ).input_indices == (10, 20, 30)
+
+
     print(f"Total {time.time() - t:0.2f} seconds.")
