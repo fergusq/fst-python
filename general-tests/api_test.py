@@ -113,4 +113,30 @@ for k in [kfst, kfst_py]:
         tuple()
     )
 
+    print("FSTState items are of valid types")
+
+    assert kfst.transducer.FSTState(
+        state_num=3,
+        path_weight=12.5,
+        input_flags=Map({"x": (True, "y")}),
+        output_flags=Map({"u": (True, "v")}),
+        output_symbols=(kfst.symbols.SpecialSymbol.EPSILON,),
+    ).input_flags == Map({"x": (True, "y")})
+
+    assert kfst.transducer.FSTState(
+        state_num=3,
+        path_weight=12.5,
+        input_flags=Map({"x": (True, "y")}),
+        output_flags=Map({"u": (True, "v")}),
+        output_symbols=(kfst.symbols.SpecialSymbol.EPSILON,),
+    ).output_flags == Map({"u": (True, "v")})
+
+    assert kfst.transducer.FSTState(
+        state_num=3,
+        path_weight=12.5,
+        input_flags=Map({"x": (True, "y")}),
+        output_flags=Map({"u": (True, "v")}),
+        output_symbols=(kfst.symbols.SpecialSymbol.EPSILON, kfst.symbols.SpecialSymbol.UNKNOWN, kfst.symbols.SpecialSymbol.IDENTITY),
+    ).output_symbols == (kfst.symbols.SpecialSymbol.EPSILON, kfst.symbols.SpecialSymbol.UNKNOWN, kfst.symbols.SpecialSymbol.IDENTITY)
+
     print(f"Total {time.time() - t:0.2f} seconds.")
