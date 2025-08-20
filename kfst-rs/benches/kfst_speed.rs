@@ -119,8 +119,12 @@ fn run_voikko(c: &mut Criterion) {
     c.bench_function("run voikko", |b| {
         b.iter(|| {
             for (input, gold_val) in paragraph.iter().zip(gold.iter()) {
-                let analysis = voikko.lookup(input, FSTState::default(), true);
-                for (a, b) in analysis.unwrap().into_iter().zip(gold_val) {
+                let mut analysis = black_box(voikko.lookup(black_box(input), black_box(FSTState::default()), black_box(true))).unwrap();
+                analysis.sort_by(|x, y| x.1.partial_cmp(&y.1).unwrap().then(x.0.cmp(&y.0)));
+                let mut mut_gold = gold_val.clone();
+                mut_gold.sort_by(|x, y| x.1.partial_cmp(&y.1).unwrap().then(x.0.cmp(&y.0)));
+                
+                for (a, b) in analysis.into_iter().zip(mut_gold) {
                     assert!(a.0.as_str() == b.0);
                     assert!(a.1 == b.1);
                 }
