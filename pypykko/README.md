@@ -101,4 +101,4 @@ Eg. when looking at "isonvarpaan", one might want to not only know that it is th
 
 PyPykko is licensed under the MIT license like Pykko itself, as it is mostly constituted of Pykko's files with minor modifications. See the LICENSE file for details. Note that kfst (and kfst-rs) have less permissive licenses.
 
-Files from Pykko itself are modified from the version in commit 79aede77eb8ed1f91dd9a20c685f29da6c786d65. The compiled transducers are from the same commit.
+Files from Pykko itself are modified from the version in commit 95f3d51f0e94a1e88ab7c750f2bedcb6b3fd5edd. The compiled transducers are from the same commit.
