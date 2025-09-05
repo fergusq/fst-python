@@ -24,7 +24,7 @@ def analyze_with_compound_parts(word, only_best=True, normalize_separators=True,
 				else:
 					piece_ranges.append(range(piece_ranges[-1].stop, len(input_pieces)))
 				break
-			if piece.get_symbol() in ("|", "⁅BOUNDARY⁆", "⁅HYPHEN⁆"):
+			if piece.get_symbol() in ("-", "|", "⁅BOUNDARY⁆", "⁅HYPHEN⁆"):
 				if len(piece_ranges) == 0:
 					piece_ranges.append(range(0, input_piece_idx))
 				else:
@@ -65,7 +65,16 @@ def analyze_with_compound_parts(word, only_best=True, normalize_separators=True,
 		if response == 'has-derivative' and ignore_derivatives:
 			continue
 
-		filtered.append(tuple(analysis) + (char_ranges,))
+		# Move char ranges such that hyphens are in the later component
+		# This makes it consistent with Voikko
+
+		tightened_ranges = list(char_ranges)
+		for i in range(len(tightened_ranges)):
+			if word[tightened_ranges[i].start:tightened_ranges[i].stop].startswith("-") and i > 0:
+				tightened_ranges[i] = range(tightened_ranges[i].start+1, tightened_ranges[i].stop)
+				tightened_ranges[i-1] = range(tightened_ranges[i-1].start, tightened_ranges[i-1].stop+1)
+
+		filtered.append(tuple(analysis) + (tuple(tightened_ranges),))
 		best = weight
 
 	return filtered
