@@ -69,6 +69,22 @@ POS_TAGS = [
 	'none',
 ]
 
+CLITICS = {
+"+han",
+"+ka",
+"+kaan",
+"+kin",
+"+ko",
+"+pa",
+"+poss1pl",
+"+poss1sg",
+"+poss2pl",
+"+poss2sg",
+"+poss3",
+"+poss3",
+"+s",
+}
+
 FIELDS = [
 	'',    # 1. source
 	'%s',  # 2. lemma
