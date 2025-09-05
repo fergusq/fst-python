@@ -19,5 +19,7 @@ assert reinflect("hömppäämme", model="juokset", pos="noun") == {'hömpät'}
 from pypykko.utils import analyze
 assert analyze("hätkähtäneet") == [('hätkähtäneet', 'Lexicon', 'hätkähtää', 'verb', '', '', '+past+conneg+pl', 0.0), ('hätkähtäneet', 'Lexicon', 'hätkähtää', 'verb', '', '', '+part_past+pl+nom', 0.0), ('hätkähtäneet', 'Lexicon', 'hätkähtänyt', 'participle', '', ' ← verb:hätkähtää:+part_past', '+pl+nom', 0.0)]
 
+assert analyze("ikäisensä") == [('ikäisensä', 'Lexicon', 'ikäinen', 'adjective', '', '', '+sg+nom+poss3', 0.0), ('ikäisensä', 'Lexicon', 'ikäinen', 'adjective', '', '', '+sg+gen+poss3', 0.0), ('ikäisensä', 'Lexicon', 'ikäinen', 'adjective', '', '', '+pl+nom+poss3', 0.0)]
+
 from pypykko.generate import generate_wordform
 assert generate_wordform("höpönassu", "noun", '+pl+abe+ko') == {'höpönassuittako'}
