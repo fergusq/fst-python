@@ -2747,7 +2747,8 @@ impl FST {
     /// If tokenization fails, returns a [KFSTResult::Err] variant
     ///
     /// If you just want strings in and strings out, look at [FST::lookup]. If you need more control over tokenization (or if your symbols just can not be parsed from a string representation), [FST::run_fst] might be what you are looking for.
-    ///
+    /// 
+    /// This method swallows output epsilons. Concretely, if an input character is transduced to an epsilon, that input character is seen as being part of the transduction of whatever the next non-epsilon output character is. (See example for more details)
     /// ```rust
     /// use kfst_rs::{FST, FSTState, Symbol, StringSymbol, SpecialSymbol};
     ///
@@ -2769,7 +2770,7 @@ impl FST {
     ///        (0, Symbol::String(StringSymbol::new("Lexicon".to_string(), false))),
     ///        (0, Symbol::String(StringSymbol::new("\t".to_string(), false))),
     ///
-    ///        // Here we have a run of incrementing indices: i:i, s:s, o:o and n:@_EPSILON_SYMBOL_@.
+    ///        // Here we have a run of incrementing indices: i:i, s:s, o:o and n:@_EPSILON_SYMBOL_@. The last gets swallowed.
     ///
     ///        (0, Symbol::String(StringSymbol::new("i".to_string(), false))),
     ///        (1, Symbol::String(StringSymbol::new("s".to_string(), false))),
@@ -2788,8 +2789,9 @@ impl FST {
     ///        (7, Symbol::String(StringSymbol::new("v".to_string(), false))),
     ///        (8, Symbol::String(StringSymbol::new("a".to_string(), false))),
     ///
-    ///        // These two are somewhat surprising: @_EPSILON_SYMBOL_@:s and  a:@_EPSILON_SYMBOL_@
+    ///        // These two are somewhat surprising: @_EPSILON_SYMBOL_@:s and  a:@_EPSILON_SYMBOL_@.
     ///        // Notably there is consonant gradation going on (varva -> varpa)
+    ///        // As the output epsilon gets swallowed, this gets interpreted as a:s.
     ///
     ///        (9, Symbol::String(StringSymbol::new("s".to_string(), false))),
     ///
