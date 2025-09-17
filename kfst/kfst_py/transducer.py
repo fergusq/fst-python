@@ -229,7 +229,7 @@ class FST(NamedTuple):
             if new_input_flags is None:
                 continue  # flag unification failed
 
-            o = (isymbol,) if isymbol is not None and osymbol == SpecialSymbol.IDENTITY else (osymbol,)
+            o = (isymbol,) if isymbol is not None and osymbol == SpecialSymbol.IDENTITY else (osymbol,) if not osymbol.is_epsilon() else ()
 
             new_state = FSTState(
                 state_num=next_state,
@@ -267,7 +267,7 @@ class FST(NamedTuple):
         for _, _, state in results:
             w = state.path_weight
             os = state.output_symbols
-            o = "".join(s.get_symbol() for s in os if not s.is_epsilon())
+            o = "".join(s.get_symbol() for s in os)
             if o not in already_seen:
                 yield o, w
                 already_seen.add(o)
