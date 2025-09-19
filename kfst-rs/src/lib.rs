@@ -68,7 +68,7 @@
 //! ```
 
 use std::cmp::Ordering;
-use std::collections::{HashSet};
+use std::collections::HashSet;
 use std::fmt::Debug;
 #[cfg(feature = "python")]
 use std::fmt::Error;
@@ -1429,7 +1429,6 @@ where
 }
 
 impl FlagMap {
-
     /// Create a new empty FlagMap
     pub fn new() -> FlagMap {
         FlagMap(vec![])
@@ -1561,11 +1560,13 @@ impl<T: Clone + Default> FSTLinkedList<T> {
         if input_indices.len() == 0 {
             output_symbols.into_iter().zip(std::iter::repeat(T::default())).collect()
         } else if input_indices.len() == output_symbols.len() {
-            output_symbols.into_iter().zip(input_indices.into_iter()).collect()
+            output_symbols
+                .into_iter()
+                .zip(input_indices.into_iter())
+                .collect()
         } else {
             panic!("Mismatch in input index and output symbol len: {} output symbols and {} input indices.", output_symbols.len(), input_indices.len());
         }
-        
     }
 }
 
@@ -1725,22 +1726,26 @@ impl<T: Clone + Debug + Default> FSTState<T> {
     #[cfg(feature = "python")]
     #[getter]
     fn output_symbols<'a>(&'a self, py: Python<'a>) -> Result<Bound<'a, PyTuple>, PyErr> {
-        PyTuple::new(py, self.symbol_mappings.clone().into_iter()
-            .map(|x| x.0.clone()))
+        PyTuple::new(
+            py,
+            self.symbol_mappings
+                .clone()
+                .into_iter()
+                .map(|x| x.0.clone()),
+        )
     }
 
     #[cfg(feature = "python")]
     #[getter]
     fn input_indices<'a>(&'a self, py: Python<'a>) -> Result<Bound<'a, PyTuple>, PyErr> {
-        PyTuple::new(py, self.symbol_mappings.clone().into_iter()
-            .map(|x| x.1))
+        PyTuple::new(py, self.symbol_mappings.clone().into_iter().map(|x| x.1))
     }
 
     #[cfg(not(feature = "python"))]
     /// Return the output symbols for this state. Internally, they are (as of now) stored in a [FSTLinkedList]. Calling this method reconstructs a vector.
     /// ```rust
     /// use kfst_rs::{FSTState, FlagMap, Symbol, SpecialSymbol};
-    /// 
+    ///
     /// let output_symbols = vec![
     ///     Symbol::Special(SpecialSymbol::EPSILON),
     ///     Symbol::Special(SpecialSymbol::UNKNOWN),
@@ -1751,7 +1756,9 @@ impl<T: Clone + Debug + Default> FSTState<T> {
     // assert!(state.output_symbols() == orig);
     /// ```
     pub fn output_symbols(&self) -> Vec<Symbol> {
-        self.symbol_mappings.clone().into_iter()
+        self.symbol_mappings
+            .clone()
+            .into_iter()
             .map(|x| x.0)
             .collect()
     }
@@ -1760,7 +1767,7 @@ impl<T: Clone + Debug + Default> FSTState<T> {
     /// Return the output symbols for this state. Internally, they are (as of now) stored in a [FSTLinkedList]. Calling this method reconstructs a vector.
     /// ```rust
     /// use kfst_rs::{FSTState, FlagMap, Symbol, SpecialSymbol};
-    /// 
+    ///
     /// let output_symbols = vec![
     ///     Symbol::Special(SpecialSymbol::EPSILON),
     ///     Symbol::Special(SpecialSymbol::UNKNOWN),
@@ -1785,8 +1792,16 @@ impl<T: Clone + Debug + Default> FSTState<T> {
             self.path_weight,
             self.input_flags,
             self.output_flags,
-            self.symbol_mappings.clone().into_iter().map(|x| x.0).collect::<Vec<_>>(),
-            self.symbol_mappings.clone().into_iter().map(|x| x.1).collect::<Vec<_>>()
+            self.symbol_mappings
+                .clone()
+                .into_iter()
+                .map(|x| x.0)
+                .collect::<Vec<_>>(),
+            self.symbol_mappings
+                .clone()
+                .into_iter()
+                .map(|x| x.1)
+                .collect::<Vec<_>>()
         )
     }
 }
@@ -2018,14 +2033,21 @@ impl FST {
                     // Long and complicated maneuver to make a decision of what to do at compile time.
                     // If we want unit output anyway, we should just compile this condition away
 
-                    let new_symbol_mapping: FSTLinkedList<T> = T::with_added_value(T::Zero, input_symbol_index, |idx| {
-                    FSTLinkedList::Some(
-                            (new_osymbol.clone(), idx),
-                            Arc::new(state.symbol_mappings.clone()),
-                    )
-                    },
-                    || state.symbol_mappings.clone()
-                );
+                    let new_symbol_mapping: FSTLinkedList<T> = if new_osymbol.is_epsilon() {
+                        state.symbol_mappings.clone() // Easy case: nothing new to declare anyway
+                    } else {
+                        T::with_added_value(T::Zero, input_symbol_index, |idx| {
+                            FSTLinkedList::Some(
+                            (new_osymbol.clone(), idx), // Here idx: usize
+                            Arc::new(state.symbol_mappings.clone()))
+                        },
+                        || {
+                            FSTLinkedList::Some(
+                            (new_osymbol.clone(), T::Zero), // Here T::Zero = ()
+                            Arc::new(state.symbol_mappings.clone()))
+
+                        })
+                    };
                     let new_state = FSTState {
                         state_num: *next_state,
                         path_weight: state.path_weight + *weight,
@@ -2790,8 +2812,8 @@ impl FST {
     /// If tokenization fails, returns a [KFSTResult::Err] variant
     ///
     /// If you just want strings in and strings out, look at [FST::lookup]. If you need more control over tokenization (or if your symbols just can not be parsed from a string representation), [FST::run_fst] might be what you are looking for.
-    ///
-    /// As ε-transitions are trimmed at run-time, ε-symbols don't appear in the output on the output side. Instead, transitions that are ε on the output side are attached
+    /// 
+    /// This method swallows output epsilons. Concretely, if an input character is transduced to an epsilon, that input character is seen as being part of the transduction of whatever the next non-epsilon output character is. (See example for more details)
     /// ```rust
     /// use kfst_rs::{FST, FSTState, Symbol, StringSymbol, SpecialSymbol};
     ///
@@ -2813,7 +2835,7 @@ impl FST {
     ///        (0, Symbol::String(StringSymbol::new("Lexicon".to_string(), false))),
     ///        (0, Symbol::String(StringSymbol::new("\t".to_string(), false))),
     ///
-    ///        // Here we have a run of incrementing indices: i:i, s:s, o:o and n:@_EPSILON_SYMBOL_@ (trimmed).
+    ///        // Here we have a run of incrementing indices: i:i, s:s, o:o and n:@_EPSILON_SYMBOL_@. The last gets swallowed.
     ///
     ///        (0, Symbol::String(StringSymbol::new("i".to_string(), false))),
     ///        (1, Symbol::String(StringSymbol::new("s".to_string(), false))),
@@ -2832,8 +2854,9 @@ impl FST {
     ///        (7, Symbol::String(StringSymbol::new("v".to_string(), false))),
     ///        (8, Symbol::String(StringSymbol::new("a".to_string(), false))),
     ///
-    ///        // These two are somewhat surprising: @_EPSILON_SYMBOL_@:s and a:@_EPSILON_SYMBOL_@
+    ///        // These two are somewhat surprising: @_EPSILON_SYMBOL_@:s and  a:@_EPSILON_SYMBOL_@.
     ///        // Notably there is consonant gradation going on (varva -> varpa)
+    ///        // As the output epsilon gets swallowed, this gets interpreted as a:s.
     ///
     ///        (9, Symbol::String(StringSymbol::new("s".to_string(), false))),
     ///
@@ -3737,23 +3760,25 @@ fn fst_linked_list_conversion_correctness_internal_methods() {
     let orig = vec![
         Symbol::Special(SpecialSymbol::EPSILON),
         Symbol::Special(SpecialSymbol::IDENTITY),
-        Symbol::Special(SpecialSymbol::UNKNOWN)
+        Symbol::Special(SpecialSymbol::UNKNOWN),
     ];
     assert!(
-        FSTLinkedList::from_vec(orig.clone(), vec![10, 20, 30]).to_vec() ==
-        vec![
-            (Symbol::Special(SpecialSymbol::EPSILON), 10),
-            (Symbol::Special(SpecialSymbol::IDENTITY), 20),
-            (Symbol::Special(SpecialSymbol::UNKNOWN), 30),
-        ]);
+        FSTLinkedList::from_vec(orig.clone(), vec![10, 20, 30]).to_vec()
+            == vec![
+                (Symbol::Special(SpecialSymbol::EPSILON), 10),
+                (Symbol::Special(SpecialSymbol::IDENTITY), 20),
+                (Symbol::Special(SpecialSymbol::UNKNOWN), 30),
+            ]
+    );
 
     assert!(
-        FSTLinkedList::from_vec(orig.clone(), vec![]).to_vec() ==
-        vec![
-            (Symbol::Special(SpecialSymbol::EPSILON), 0),
-            (Symbol::Special(SpecialSymbol::IDENTITY), 0),
-            (Symbol::Special(SpecialSymbol::UNKNOWN), 0),
-        ]);
+        FSTLinkedList::from_vec(orig.clone(), vec![]).to_vec()
+            == vec![
+                (Symbol::Special(SpecialSymbol::EPSILON), 0),
+                (Symbol::Special(SpecialSymbol::IDENTITY), 0),
+                (Symbol::Special(SpecialSymbol::UNKNOWN), 0),
+            ]
+    );
 }
 
 #[test]
@@ -3761,7 +3786,7 @@ fn fst_linked_list_conversion_correctness_iterators_with_indices() {
     let orig = vec![
         (Symbol::Special(SpecialSymbol::EPSILON), 10),
         (Symbol::Special(SpecialSymbol::IDENTITY), 20),
-        (Symbol::Special(SpecialSymbol::UNKNOWN), 30)
+        (Symbol::Special(SpecialSymbol::UNKNOWN), 30),
     ];
     let ll: FSTLinkedList<usize> = orig.clone().into_iter().collect();
     assert!(ll.into_iter().collect::<Vec<_>>() == vec![
