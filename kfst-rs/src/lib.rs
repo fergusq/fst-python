@@ -1586,16 +1586,28 @@ pub struct FSTState {
 impl FSTState {
     
     #[new]
-    #[pyo3(signature = (state_num, path_weight=0.0, input_flags = FlagMap::new(), output_flags = FlagMap::new(), output_symbols=vec![], input_indices=vec![]))]
+    #[pyo3(signature = (state_num, path_weight=0.0, input_flags = FlagMap::new(), output_flags = FlagMap::new(), output_symbols=vec![], input_indices=Some(vec![])))]
     fn new(
         state_num: u64,
         path_weight: f64,
         input_flags: FlagMap,
         output_flags: FlagMap,
         output_symbols: Vec<Symbol>,
-        input_indices: Vec<usize>,
+        input_indices: Option<Vec<usize>>,
     ) -> Self {
-        FSTState { payload: Ok(InternalFSTState::new(state_num, path_weight, input_flags, output_flags, output_symbols, input_indices)) }
+        match input_indices {
+            Some(idxs) => FSTState { payload: Ok(InternalFSTState::new(state_num, path_weight, input_flags, output_flags, output_symbols, idxs)) },
+            None => FSTState {
+                payload: Err(InternalFSTState::new(state_num, path_weight, input_flags, output_flags, output_symbols, vec![]))
+            },
+        }
+    }
+
+    fn strip_indices(&self) -> FSTState {
+        match &self.payload {
+            Ok(p) => FSTState { payload: Err(p.clone().convert_indices()) },
+            Err(p) => self.clone(),
+        }
     }
 
     #[getter]
@@ -3258,10 +3270,25 @@ impl FST {
         }
         
     }
+
+    pub fn get_input_symbols(&self, state: FSTState) -> HashSet<Symbol> {
+        match state.payload {
+            Ok(p) => self._get_input_symbols(p),
+            Err(p) => self._get_input_symbols(p)
+        }
+    }
 }
 
 impl FST {
-    #[deprecated]
+    
+    fn _get_input_symbols<T>(&self, state: InternalFSTState<T>) -> HashSet<Symbol> {
+        self.rules
+            .get(&state.state_num)
+            .map(|x| x.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    #[cfg(not(feature="python"))]
     /// Equal to:
     /// ```no_test
     /// self.rules[&state.state_num].keys().cloned().collect()
@@ -3280,10 +3307,7 @@ impl FST {
     /// assert_eq!(fst.get_input_symbols(FSTState::new(1, 0.0, HashMap::new(), HashMap::new(), vec![], vec![])), HashSet::new());
     /// ```
     pub fn get_input_symbols<T>(&self, state: InternalFSTState<T>) -> HashSet<Symbol> {
-        self.rules
-            .get(&state.state_num)
-            .map(|x| x.keys().cloned().collect())
-            .unwrap_or_default()
+        self._get_input_symbols(state)
     }
 }
 
