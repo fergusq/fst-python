@@ -10,6 +10,7 @@ pip install ../kfst
 
 python api_test.py
 python format_test.py
+python test_input_symbols.py
 
 # Needs to be run with and without kfst-rs installed
 

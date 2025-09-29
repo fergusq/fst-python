@@ -35,10 +35,36 @@ class FSTState(NamedTuple):
     input_flags: Map[str, tuple[bool, str]] = Map()
     output_flags: Map[str, tuple[bool, str]] = Map()
     output_symbols: tuple[Symbol, ...] = tuple()
-    input_indices: tuple[int, ...] = tuple()
+    input_indices: tuple[int, ...] | None = tuple()
 
     def __repr__(self):
         return f"FSTState({self.state_num}, {self.path_weight}, {self.input_flags}, {self.output_flags}, {self.output_symbols}, {self.input_indices})"
+    
+    def strip_indices(self):
+        if self.input_indices is None:
+            return self
+        else:
+            return FSTState(
+                state_num=self.state_num,
+                path_weight=self.path_weight,
+                input_flags=self.input_flags,
+                output_flags=self.output_flags,
+                output_symbols=self.output_symbols,
+                input_indices=None
+            )
+    
+    def ensure_indices(self):
+        if self.input_indices is not None:
+            return self
+        else:
+            return FSTState(
+                state_num=self.state_num,
+                path_weight=self.path_weight,
+                input_flags=self.input_flags,
+                output_flags=self.output_flags,
+                output_symbols=self.output_symbols,
+                input_indices=(0,) * len(self.output_symbols)
+            )
 
 
 class FST(NamedTuple):
@@ -234,7 +260,10 @@ class FST(NamedTuple):
                 new_input_indices = state.input_indices
             else:
                 o = (isymbol,) if isymbol is not None and osymbol == SpecialSymbol.IDENTITY else (osymbol,) if not osymbol.is_epsilon() else ()
-                new_input_indices = state.input_indices + (input_symbol_index,)
+                if state.input_indices is not None:
+                    new_input_indices = state.input_indices + (input_symbol_index,)
+                else:
+                    new_input_indices = None
 
             if osymbol.is_epsilon():
                 assert len(o) == 0, o
@@ -295,11 +324,14 @@ class FST(NamedTuple):
         if input_symbols is None:
             raise TokenizationException("Input cannot be split into symbols")
 
+        assert state.input_indices is not None, f"lookup_aligned refuses to work with states with input_indices=None (passed state {state}). Manually convert it to an indexed state by calling ensure_indices()"
+
         results = self.run_fst(input_symbols, state=state, input_symbol_index=0, keep_non_final=False)
         results = sorted(results, key=lambda x: x[2].path_weight)
         already_seen = set()
         for _, _, state in results:
             w = state.path_weight
+            assert state.input_indices is not None
             o = tuple(zip(state.input_indices, state.output_symbols))
             if o not in already_seen:
                 yield o, w

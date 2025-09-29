@@ -90,7 +90,7 @@ use pyo3::create_exception;
 #[cfg(feature = "python")]
 use pyo3::exceptions::{PyIOError, PyValueError};
 #[cfg(feature = "python")]
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::{PyDict, PyNone, PyTuple};
 #[cfg(feature = "python")]
 use pyo3::{prelude::*, py_run, IntoPyObjectExt};
 
@@ -1623,7 +1623,16 @@ impl FSTState {
             Ok(p) => FSTState {
                 payload: Err(p.clone().convert_indices()),
             },
-            Err(p) => self.clone(),
+            Err(_p) => self.clone(),
+        }
+    }
+
+    fn ensure_indices(&self) -> FSTState {
+        match &self.payload {
+            Ok(_p) => self.clone(),
+            Err(p) => FSTState {
+                payload: Ok(p.clone().convert_indices()),
+            },
         }
     }
 
@@ -1639,10 +1648,10 @@ impl FSTState {
     }
 
     #[getter]
-    fn input_indices<'a>(&'a self, py: Python<'a>) -> Result<Bound<'a, PyTuple>, PyErr> {
+    fn input_indices<'a>(&'a self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
         match &self.payload {
-            Ok(p) => PyTuple::new(py, p.input_indices()),
-            Err(p) => PyTuple::new(py, p.input_indices()),
+            Ok(p) => PyTuple::new(py, p.input_indices().unwrap())?.into_bound_py_any(py),
+            Err(_p) => PyNone::get(py).into_bound_py_any(py),
         }
     }
 
@@ -1735,7 +1744,7 @@ impl<'py> IntoPyObject<'py> for InternalFSTState<()> {
 /// There are cases where the input indices are useful, notably for [FST::lookup_aligned].
 /// However, if you do not want to use that method, you can get away with passing the unit type.
 /// This causes the book-keeping relating to indices to be compiled away.
-pub struct InternalFSTState<T = usize> {
+pub struct InternalFSTState<T> {
     /// Number of the state in the FST.
     pub state_num: u64,
     /// Sum of transition weights so far.
@@ -1849,7 +1858,7 @@ impl<T: Clone + Default> InternalFSTState<T> {
     }
 }
 
-impl<T: Clone + Debug + Default> InternalFSTState<T> {
+impl<T: Clone + Debug + Default + UsizeOrUnit> InternalFSTState<T> {
     #[cfg(feature = "python")]
     fn new(
         state_num: u64,
@@ -1889,7 +1898,7 @@ impl<T: Clone + Debug + Default> InternalFSTState<T> {
             .collect()
     }
 
-    /// Return the output symbols for this state. Internally, they are (as of now) stored in a [FSTLinkedList]. Calling this method reconstructs a vector.
+    /// Return the output symbols for this state. Internally, they are (as of now) stored in a [FSTLinkedList]. Calling this method reconstructs a vector if T = usize and returns None otherwise.
     /// ```rust
     /// use kfst_rs::{FSTState, FlagMap, Symbol, SpecialSymbol};
     ///
@@ -1900,14 +1909,23 @@ impl<T: Clone + Debug + Default> InternalFSTState<T> {
     /// ];
     /// // The actual alignment (last argument ie. input_indices) here is nonsensical
     /// let state = FSTState::new(0, 0.0, FlagMap::new(), FlagMap::new(), output_symbols.clone(), vec![10, 20, 30]);
-    // assert!(state.input_indices() == vec![10, 20, 30]);
+    /// assert!(state.input_indices() == Some(vec![10, 20, 30]));
+    /// let state2 = FSTState::new(0, 0.0, FlagMap::new(), FlagMap::new(), output_symbols.clone(), vec![(), (), ()]);
+    /// assert!(state2.input_indices() == None);
     /// ```
-    pub fn input_indices(&self) -> Vec<T> {
-        self.symbol_mappings
-            .clone()
-            .into_iter()
-            .map(|x| x.1)
-            .collect()
+    pub fn input_indices(&self) -> Option<Vec<usize>> {
+        T::branch(
+            || {
+                Some(
+                    self.symbol_mappings
+                        .clone()
+                        .into_iter()
+                        .map(|x| x.1.as_usize())
+                        .collect(),
+                )
+            },
+            || None,
+        )
     }
 
     #[deprecated]
@@ -3315,9 +3333,13 @@ impl FST {
         state: FSTState,
         allow_unknown: bool,
     ) -> KFSTResult<Vec<(Vec<(usize, Symbol)>, f64)>> {
+        use pyo3::exceptions::PyAssertionError;
+
         match state.payload {
             Ok(p) => self._lookup_aligned(input, p, allow_unknown),
-            Err(p) => self._lookup_aligned(input, p, allow_unknown),
+            Err(p) => PyResult::Err(PyErr::new::<PyAssertionError, _>(
+                format!("lookup_aligned refuses to work with states with input_indices=None (passed state {}). Manually convert it to an indexed state by calling ensure_indices()", p.__repr__())
+            )),
         }
     }
 }
