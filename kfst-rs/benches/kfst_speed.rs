@@ -121,7 +121,7 @@ fn run_voikko(c: &mut Criterion) {
             for (input, gold_val) in paragraph.iter().zip(gold.iter()) {
                 let mut analysis = black_box(voikko.lookup(
                     black_box(input),
-                    black_box(InternalFSTState::default()),
+                    black_box(InternalFSTState::<()>::default()),
                     black_box(true),
                 ))
                 .unwrap();
