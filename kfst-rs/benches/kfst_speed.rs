@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use kfst_rs::{FSTState, FST};
+use kfst_rs::{InternalFSTState, FST};
 use std::hint::black_box;
 
 fn load_pypykko(c: &mut Criterion) {
@@ -121,7 +121,7 @@ fn run_voikko(c: &mut Criterion) {
             for (input, gold_val) in paragraph.iter().zip(gold.iter()) {
                 let mut analysis = black_box(voikko.lookup(
                     black_box(input),
-                    black_box(FSTState::default()),
+                    black_box(InternalFSTState::default()),
                     black_box(true),
                 ))
                 .unwrap();

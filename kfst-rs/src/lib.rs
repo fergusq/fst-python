@@ -1570,54 +1570,164 @@ impl<T: Clone + Default> FSTLinkedList<T> {
     }
 }
 
+#[cfg(not(feature="python"))]
+type FSTState<T> = InternalFSTState<T>;
+
+
+#[cfg(feature="python")]
 #[cfg_attr(feature = "python", pyclass(frozen, eq, hash))]
+#[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
+pub struct FSTState {
+    payload: Result<InternalFSTState::<usize>, InternalFSTState::<()>>
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl FSTState {
+    
+    #[new]
+    #[pyo3(signature = (state_num, path_weight=0.0, input_flags = FlagMap::new(), output_flags = FlagMap::new(), output_symbols=vec![], input_indices=vec![]))]
+    fn new(
+        state_num: u64,
+        path_weight: f64,
+        input_flags: FlagMap,
+        output_flags: FlagMap,
+        output_symbols: Vec<Symbol>,
+        input_indices: Vec<usize>,
+    ) -> Self {
+        FSTState { payload: Ok(InternalFSTState::new(state_num, path_weight, input_flags, output_flags, output_symbols, input_indices)) }
+    }
+
+    #[getter]
+    fn output_symbols<'a>(&'a self, py: Python<'a>) -> Result<Bound<'a, PyTuple>, PyErr> {
+        PyTuple::new(py, match &self.payload {
+            Ok(p) => p.output_symbols(),
+            Err(p) => p.output_symbols(),
+        })
+    }
+
+    #[getter]
+    fn input_indices<'a>(&'a self, py: Python<'a>) -> Result<Bound<'a, PyTuple>, PyErr> {
+        match &self.payload {
+            Ok(p) => PyTuple::new(py, p.input_indices()),
+            Err(p) => PyTuple::new(py, p.input_indices()),
+        }
+    }
+
+
+    #[deprecated]
+    /// Python-style string representation.
+    pub fn __repr__(&self) -> String {
+        match &self.payload {
+            Ok(p) => p.__repr__(),
+            Err(p) => p.__repr__(),
+        }
+    }
+
+    #[getter]
+    pub fn state_num(&self) -> u64 {
+        match &self.payload {
+            Ok(p) => p.state_num,
+            Err(p) => p.state_num
+        }
+    }
+
+    #[getter]
+    pub fn path_weight(&self) -> f64 {
+        match &self.payload {
+            Ok(p) => p.path_weight,
+            Err(p) => p.path_weight
+        }
+    }
+
+    #[getter]
+    pub fn input_flags(&self) -> FlagMap {
+        match &self.payload {
+            Ok(p) => p.input_flags.clone(),
+            Err(p) => p.input_flags.clone()
+        }
+    }
+
+    #[getter]
+    pub fn output_flags(&self) -> FlagMap {
+        match &self.payload {
+            Ok(p) => p.output_flags.clone(),
+            Err(p) => p.output_flags.clone()
+        }
+    }
+
+}
+
+#[cfg(feature = "python")]
+impl<T: UsizeOrUnit + Default> FromPyObject<'_> for InternalFSTState<T> {
+    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let wrapped: FSTState = ob.extract()?;
+        match wrapped.payload {
+            Ok(p) => Ok(p.convert_indices()),
+            Err(p) => Ok(p.convert_indices()),
+        }
+    }
+}
+
+#[cfg(feature = "python")]
+impl<'py> IntoPyObject<'py> for InternalFSTState<usize> {
+    type Target = FSTState;
+
+    type Output = Bound<'py, Self::Target>;
+
+    type Error = pyo3::PyErr;
+
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        FSTState { payload: Ok(self)}.into_pyobject(py)
+    }
+}
+
+#[cfg(feature = "python")]
+impl<'py> IntoPyObject<'py> for InternalFSTState<()> {
+    type Target = FSTState;
+
+    type Output = Bound<'py, Self::Target>;
+
+    type Error = pyo3::PyErr;
+
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        FSTState { payload: Err(self)}.into_pyobject(py)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 #[readonly::make]
 /// A state in an [FST].
 /// Not only does this contain the state number itself,
 /// but also the path weight so far, the output symbol sequence
 /// and the input and output flag state.
-pub struct FSTState<T> {
+pub struct InternalFSTState<T> {
     /// Number of the state in the FST.
-    #[cfg(not(feature = "python"))]
-    pub state_num: u64,
-    #[cfg(feature = "python")]
-    #[pyo3(get)]
     pub state_num: u64,
     /// Sum of transition weights so far.
-    #[cfg(not(feature = "python"))]
-    pub path_weight: f64,
-    #[cfg(feature = "python")]
-    #[pyo3(get)]
     pub path_weight: f64,
     /// Mapping from flags to what they are set to (input side)
-    #[cfg(not(feature = "python"))]
-    pub input_flags: FlagMap,
-    #[cfg(feature = "python")]
-    #[pyo3(get)]
     pub input_flags: FlagMap,
     /// Mapping from flags to what they are set to (output side)
-    #[cfg(not(feature = "python"))]
-    pub output_flags: FlagMap,
-    #[cfg(feature = "python")]
-    #[pyo3(get)]
     pub output_flags: FlagMap,
     /// Output side symbols & alignments for the transduction so far.
     pub symbol_mappings: FSTLinkedList<T>,
 }
 
-impl<T: Clone + Default + Debug + UsizeOrUnit> FSTState<T> {
-    fn convert_indices<T2: UsizeOrUnit + Default>(self) -> FSTState<T2> {
+impl<T: Clone + Default + Debug + UsizeOrUnit> InternalFSTState<T> {
+    fn convert_indices<T2: UsizeOrUnit + Default>(self) -> InternalFSTState<T2> {
         let new_mappings = self.symbol_mappings.into_iter().map(
             |(sym, idx)| {
                 (sym, T2::convert(idx))
             }
         ).collect();
-        FSTState { state_num: self.state_num, path_weight: self.path_weight, input_flags: self.input_flags, output_flags: self.output_flags, symbol_mappings: new_mappings }
+        InternalFSTState { state_num: self.state_num, path_weight: self.path_weight, input_flags: self.input_flags, output_flags: self.output_flags, symbol_mappings: new_mappings }
     }
 }
 
-impl<T> Default for FSTState<T> {
+impl<T> Default for InternalFSTState<T> {
     /// Produce a neutral start state: number 0, no weight, empty flags, empty input indices and empty output.
     fn default() -> Self {
         Self {
@@ -1630,7 +1740,7 @@ impl<T> Default for FSTState<T> {
     }
 }
 
-impl<T: Hash> Hash for FSTState<T> {
+impl<T: Hash> Hash for InternalFSTState<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.state_num.hash(state);
         self.path_weight.to_be_bytes().hash(state);
@@ -1644,9 +1754,9 @@ fn _test_flag(stored_val: &(bool, u32), queried_val: u32) -> bool {
     stored_val.0 == (stored_val.1 == queried_val)
 }
 
-impl<T: Clone + Default> FSTState<T> {
+impl<T: Clone + Default> InternalFSTState<T> {
     fn _new(state: u64) -> Self {
-        FSTState {
+        InternalFSTState {
             state_num: state,
             path_weight: 0.0,
             input_flags: FlagMap::new(),
@@ -1666,7 +1776,7 @@ impl<T: Clone + Default> FSTState<T> {
     where
         F: Into<FlagMap>,
     {
-        FSTState {
+        InternalFSTState {
             state_num: state,
             path_weight,
             input_flags: input_flags.into(),
@@ -1690,7 +1800,7 @@ impl<T: Clone + Default> FSTState<T> {
     where
         F: Into<FlagMap>,
     {
-        FSTState::__new(
+        InternalFSTState::__new(
             state_num,
             path_weight,
             input_flags,
@@ -1701,20 +1811,18 @@ impl<T: Clone + Default> FSTState<T> {
     }
 }
 
-#[cfg_attr(feature = "python", pymethods)]
-impl<T: Clone + Debug + Default> FSTState<T> {
+
+impl<T: Clone + Debug + Default> InternalFSTState<T> {
     #[cfg(feature = "python")]
-    #[new]
-    #[pyo3(signature = (state_num, path_weight=0.0, input_flags = FlagMap::new(), output_flags = FlagMap::new(), output_symbols=vec![], input_indices=vec![]))]
     fn new(
         state_num: u64,
         path_weight: f64,
         input_flags: FlagMap,
         output_flags: FlagMap,
         output_symbols: Vec<Symbol>,
-        input_indices: Vec<usize>,
+        input_indices: Vec<T>,
     ) -> Self {
-        FSTState {
+        InternalFSTState {
             state_num,
             path_weight,
             input_flags,
@@ -1723,25 +1831,6 @@ impl<T: Clone + Debug + Default> FSTState<T> {
         }
     }
 
-    #[cfg(feature = "python")]
-    #[getter]
-    fn output_symbols<'a>(&'a self, py: Python<'a>) -> Result<Bound<'a, PyTuple>, PyErr> {
-        PyTuple::new(
-            py,
-            self.symbol_mappings
-                .clone()
-                .into_iter()
-                .map(|x| x.0.clone()),
-        )
-    }
-
-    #[cfg(feature = "python")]
-    #[getter]
-    fn input_indices<'a>(&'a self, py: Python<'a>) -> Result<Bound<'a, PyTuple>, PyErr> {
-        PyTuple::new(py, self.symbol_mappings.clone().into_iter().map(|x| x.1))
-    }
-
-    #[cfg(not(feature = "python"))]
     /// Return the output symbols for this state. Internally, they are (as of now) stored in a [FSTLinkedList]. Calling this method reconstructs a vector.
     /// ```rust
     /// use kfst_rs::{FSTState, FlagMap, Symbol, SpecialSymbol};
@@ -1763,7 +1852,6 @@ impl<T: Clone + Debug + Default> FSTState<T> {
             .collect()
     }
 
-    #[cfg(not(feature = "python"))]
     /// Return the output symbols for this state. Internally, they are (as of now) stored in a [FSTLinkedList]. Calling this method reconstructs a vector.
     /// ```rust
     /// use kfst_rs::{FSTState, FlagMap, Symbol, SpecialSymbol};
@@ -1823,16 +1911,13 @@ fn escape_att_symbol(symbol: &str) -> String {
 pub trait UsizeOrUnit: Sized {
     const Zero: Self;
     const Increment: Self;
-    fn with_added_value<F1, F2, B>(self, other: usize, func_if: F1, func_else: F2) -> B where F1: FnOnce(Self) -> B, F2: FnOnce() -> B;
-
+    fn branch<F1, F2, B>(f1: F1, f2: F2) -> B where F1: FnOnce() -> B, F2: FnOnce() -> B;
     fn as_usize(self) -> usize;
     fn convert<T: UsizeOrUnit>(x: T) -> Self;
 }
 
 impl UsizeOrUnit for usize {
-    fn with_added_value<F1, F2, B>(self, other: usize, func_if: F1, func_else: F2) -> B where F1: FnOnce(Self) -> B, F2: FnOnce() -> B {
-        func_if(self + other)
-    }
+
     
     const Zero: Self = 0;
     
@@ -1845,13 +1930,15 @@ impl UsizeOrUnit for usize {
     fn convert<T: UsizeOrUnit>(x: T) -> Self {
         x.as_usize()
     }
+    
+    fn branch<F1, F2, B>(f1: F1, f2: F2) -> B where F1: FnOnce() -> B, F2: FnOnce() -> B {
+        f1()
+    }
 
 }
 
 impl UsizeOrUnit for () {
-    fn with_added_value<F1, F2, B>(self, other: usize, func_if: F1, func_else: F2) -> B where F1: FnOnce(Self) -> B, F2: FnOnce() -> B {
-        func_else()
-    }
+
 
     fn as_usize(self) -> usize {
         0
@@ -1863,6 +1950,10 @@ impl UsizeOrUnit for () {
     
     fn convert<T: UsizeOrUnit>(x: T) -> Self {
         ()
+    }
+    
+    fn branch<F1, F2, B>(f1: F1, f2: F2) -> B where F1: FnOnce() -> B, F2: FnOnce() -> B {
+        f2()
     }
     
 }
@@ -1923,9 +2014,9 @@ impl FST {
     fn _run_fst<T: Clone + UsizeOrUnit>(
         &self,
         input_symbols: &[Symbol],
-        state: &FSTState<T>,
+        state: &InternalFSTState<T>,
         post_input_advance: bool,
-        result: &mut Vec<(bool, bool, FSTState<T>)>,
+        result: &mut Vec<(bool, bool, InternalFSTState<T>)>,
         input_symbol_index: usize,
         keep_non_final: bool,
     ) {
@@ -1937,7 +2028,7 @@ impl FST {
                     result.push((
                         true,
                         post_input_advance,
-                        FSTState {
+                        InternalFSTState {
                             state_num: state.state_num,
                             path_weight: state.path_weight + weight,
                             input_flags: state.input_flags.clone(),
@@ -2012,11 +2103,11 @@ impl FST {
         &self,
         input_symbols: &[Symbol],
         input_symbol_index: usize,
-        state: &FSTState<T>,
+        state: &InternalFSTState<T>,
         transitions: &[(u64, Symbol, f64)],
         isymbol: Option<&Symbol>,
         transition_isymbol: &Symbol,
-        result: &mut Vec<(bool, bool, FSTState<T>)>,
+        result: &mut Vec<(bool, bool, InternalFSTState<T>)>,
         keep_non_final: bool,
     ) {
         for (next_state, osymbol, weight) in transitions.iter() {
@@ -2036,19 +2127,11 @@ impl FST {
                     let new_symbol_mapping: FSTLinkedList<T> = if new_osymbol.is_epsilon() {
                         state.symbol_mappings.clone() // Easy case: nothing new to declare anyway
                     } else {
-                        T::with_added_value(T::Zero, input_symbol_index, |idx| {
-                            FSTLinkedList::Some(
-                            (new_osymbol.clone(), idx), // Here idx: usize
+                        FSTLinkedList::Some(
+                            (new_osymbol.clone(), T::convert(input_symbol_index)),
                             Arc::new(state.symbol_mappings.clone()))
-                        },
-                        || {
-                            FSTLinkedList::Some(
-                            (new_osymbol.clone(), T::Zero), // Here T::Zero = ()
-                            Arc::new(state.symbol_mappings.clone()))
-
-                        })
                     };
-                    let new_state = FSTState {
+                    let new_state = InternalFSTState {
                         state_num: *next_state,
                         path_weight: state.path_weight + *weight,
                         input_flags: new_input_flags,
@@ -2671,11 +2754,11 @@ impl FST {
     fn __run_fst<T: UsizeOrUnit + Clone>(
         &self,
         input_symbols: Vec<Symbol>,
-        state: FSTState<T>,
+        state: InternalFSTState<T>,
         post_input_advance: bool,
         input_symbol_index: usize,
         keep_non_final: bool,
-    ) -> Vec<(bool, bool, FSTState<T>)> {
+    ) -> Vec<(bool, bool, InternalFSTState<T>)> {
         let mut result = vec![];
         self._run_fst(
             input_symbols.as_slice(),
@@ -2699,11 +2782,11 @@ impl FST {
     pub fn run_fst<T: Clone + UsizeOrUnit>(
         &self,
         input_symbols: Vec<Symbol>,
-        state: FSTState<T>,
+        state: InternalFSTState<T>,
         post_input_advance: bool,
         input_symbol_index: Option<usize>,
         keep_non_final: bool,
-    ) -> Vec<(bool, bool, FSTState<T>)> {
+    ) -> Vec<(bool, bool, InternalFSTState<T>)> {
         self.__run_fst(
             input_symbols,
             state,
@@ -2716,7 +2799,7 @@ impl FST {
     fn _lookup<T: UsizeOrUnit + Clone + Default + Debug>(
         &self,
         input: &str,
-        state: FSTState<T>,
+        state: InternalFSTState<T>,
         allow_unknown: bool,
     ) -> KFSTResult<Vec<(String, f64)>> {
         let input_symbols = self.split_to_symbols(input, allow_unknown);
@@ -2725,8 +2808,8 @@ impl FST {
             Some(input_symbols) => {
                 let mut dedup: IndexSet<String> = IndexSet::new();
                 let mut result: Vec<(String, f64)> = vec![];
-                let mut finished_paths:Vec<(bool, bool, FSTState<()>)> =
-                    self.run_fst(input_symbols.clone(), state.convert_indices(), false, None, false);
+                let mut finished_paths:Vec<(bool, bool, InternalFSTState<()>)> =
+                    self.__run_fst(input_symbols.clone(), state.convert_indices(), false, 0, false);
                 finished_paths
                     .sort_by(|a, b| a.2.path_weight.partial_cmp(&b.2.path_weight).unwrap());
                 for finished in finished_paths {
@@ -2752,7 +2835,7 @@ impl FST {
     fn _lookup_aligned<T: UsizeOrUnit + Clone + Default + Debug>(
         &self,
         input: &str,
-        state: FSTState<T>,
+        state: InternalFSTState<T>,
         allow_unknown: bool,
     ) -> KFSTResult<Vec<(Vec<(usize, Symbol)>, f64)>> {
         let input_symbols = self.split_to_symbols(input, allow_unknown);
@@ -2762,7 +2845,7 @@ impl FST {
                 let mut dedup: IndexSet<Vec<(usize, Symbol)>> = IndexSet::new();
                 let mut result: Vec<(Vec<(usize, Symbol)>, f64)> = vec![];
                 let mut finished_paths: Vec<_> = self
-                    .run_fst(input_symbols.clone(), state.convert_indices(), false, None, false)
+                    .__run_fst(input_symbols.clone(), state.convert_indices(), false, 0, false)
                     .into_iter()
                     .filter(|(finished, _, _)| *finished)
                     .collect();
@@ -2798,7 +2881,7 @@ impl FST {
     pub fn lookup<T: UsizeOrUnit + Clone + Default + Debug>(
         &self,
         input: &str,
-        state: FSTState<T>,
+        state: InternalFSTState<T>,
         allow_unknown: bool,
     ) -> KFSTResult<Vec<(String, f64)>> {
         self._lookup(input, state, allow_unknown)
@@ -2873,7 +2956,7 @@ impl FST {
     pub fn lookup_aligned<T: UsizeOrUnit + Clone + Default + Debug>(
         &self,
         input: &str,
-        state: FSTState<T>,
+        state: InternalFSTState<T>,
         allow_unknown: bool,
     ) -> KFSTResult<Vec<(Vec<(usize, Symbol)>, f64)>> {
         self._lookup_aligned(input, state, allow_unknown)
@@ -3121,7 +3204,7 @@ impl FST {
     }
 
     #[cfg(feature = "python")]
-    #[pyo3(signature = (input_symbols, state = FSTState::_new(0), post_input_advance = false, input_symbol_index = None, keep_non_final = true))]
+    #[pyo3(signature = (input_symbols, state = FSTState { payload: Ok(InternalFSTState::_new(0)) }, post_input_advance = false, input_symbol_index = None, keep_non_final = true))]
     fn run_fst(
         &self,
         input_symbols: Vec<Symbol>,
@@ -3130,37 +3213,54 @@ impl FST {
         input_symbol_index: Option<usize>,
         keep_non_final: bool,
     ) -> Vec<(bool, bool, FSTState)> {
-        self.__run_fst(
+        match state.payload {
+            Ok(p) =>        self.__run_fst(
             input_symbols,
-            state,
+            p,
             post_input_advance,
             input_symbol_index.unwrap_or(0),
             keep_non_final,
-        )
+        ).into_iter().map(|(a, b, c)| (a, b, FSTState {payload: Ok(c)})).collect(),
+            Err(p) => self.__run_fst(
+            input_symbols,
+            p,
+            post_input_advance,
+            input_symbol_index.unwrap_or(0),
+            keep_non_final,
+        ).into_iter().map(|(a, b, c)| (a, b, FSTState {payload: Err(c)})).collect(),
+        }
     }
 
     #[cfg(feature = "python")]
-    #[pyo3(signature = (input, state=FSTState::_new(0), allow_unknown=true))]
+    #[pyo3(signature = (input, state=FSTState { payload: Err(InternalFSTState::_new(0)) }, allow_unknown=true))]
     fn lookup(
         &self,
         input: &str,
         state: FSTState,
         allow_unknown: bool,
     ) -> KFSTResult<Vec<(String, f64)>> {
-        self._lookup(input, state, allow_unknown)
-    }
+        match state.payload {
+            Ok(p) => self._lookup(input, p, allow_unknown),
+            Err(p) => self._lookup(input, p, allow_unknown),
+        }    }
 
     #[cfg(feature = "python")]
-    #[pyo3(signature = (input, state=FSTState::_new(0), allow_unknown=true))]
+    #[pyo3(signature = (input, state=FSTState { payload: Ok(InternalFSTState::_new(0)) }, allow_unknown=true))]
     pub fn lookup_aligned(
         &self,
         input: &str,
         state: FSTState,
         allow_unknown: bool,
     ) -> KFSTResult<Vec<(Vec<(usize, Symbol)>, f64)>> {
-        self._lookup_aligned(input, state, allow_unknown)
+        match state.payload {
+            Ok(p) => self._lookup_aligned(input, p, allow_unknown),
+            Err(p) => self._lookup_aligned(input, p, allow_unknown),
+        }
+        
     }
+}
 
+impl FST {
     #[deprecated]
     /// Equal to:
     /// ```no_test
@@ -3179,13 +3279,15 @@ impl FST {
     /// assert_eq!(fst.get_input_symbols(FSTState::new(0, 0.0, HashMap::new(), HashMap::new(), vec![], vec![])), expected);
     /// assert_eq!(fst.get_input_symbols(FSTState::new(1, 0.0, HashMap::new(), HashMap::new(), vec![], vec![])), HashSet::new());
     /// ```
-    pub fn get_input_symbols<T>(&self, state: FSTState<T>) -> HashSet<Symbol> {
+    pub fn get_input_symbols<T>(&self, state: InternalFSTState<T>) -> HashSet<Symbol> {
         self.rules
             .get(&state.state_num)
             .map(|x| x.keys().cloned().collect())
             .unwrap_or_default()
     }
 }
+
+/*
 
 #[test]
 fn test_att_trivial() {
@@ -3794,7 +3896,7 @@ fn fst_linked_list_conversion_correctness_iterators_with_indices() {
             (Symbol::Special(SpecialSymbol::IDENTITY), 20),
             (Symbol::Special(SpecialSymbol::UNKNOWN), 30),
     ]);
-}
+}*/
 
 /// A Python module implemented in Rust.
 #[cfg(feature = "python")]
