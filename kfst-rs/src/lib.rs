@@ -3342,6 +3342,14 @@ impl FST {
             )),
         }
     }
+
+    #[cfg(feature = "python")]
+    pub fn get_input_symbols(&self, state: FSTState) -> HashSet<Symbol> {
+        match state.payload {
+            Ok(p) => self._get_input_symbols(p),
+            Err(p) => self._get_input_symbols(p),
+        }
+    }
 }
 
 impl FST {
