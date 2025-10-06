@@ -107,16 +107,13 @@ def unpack(classes='', gradations='', harmonies='', vowels='', ignore_styles=Fal
 
 	classes = classes.replace('?', '').replace('!', '')
 
-	if gradations.endswith('|='):
-		strong = gradations.split(':')[0]
-		gradations = gradations.replace('=', f'{strong}:{strong}')
-
 	if ignore_styles:
 		classes = classes.replace('†', '').replace('‡', '').replace(')', '').replace('(', '')
 		gradations = gradations.replace('†', '').replace('‡', '').replace(')', '').replace('(', '')
 
 	classes = [classes] if re.findall('[†‡)(]', classes) else classes.split('|')
 	gradations = [gradations] if re.findall('[†‡)(]', gradations) else gradations.split('|')
+	gradations = ['' if grad == '=' else grad for grad in gradations]
 	harmonies = harmonies.split('|')
 	vowels = vowels.split('|')
 

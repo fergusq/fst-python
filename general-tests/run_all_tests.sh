@@ -10,6 +10,7 @@ pip install ../kfst
 
 python api_test.py
 python format_test.py
+python test_input_symbols.py
 
 # Needs to be run with and without kfst-rs installed
 
@@ -17,6 +18,8 @@ python deptest.py
 python import_test.py
 python test_pypykko.py
 python symbol_test.py
+python test_alignment_pypykko.py
+python test_pypykko_components.py
 
 pip uninstall kfst-rs -y
 
@@ -24,3 +27,5 @@ python deptest.py
 python import_test.py
 python test_pypykko.py
 python symbol_test.py
+python test_alignment_pypykko.py
+python test_pypykko_components.py

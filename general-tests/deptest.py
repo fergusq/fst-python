@@ -10,14 +10,16 @@ from pypykko.reinflect import reinflect
 assert reinflect("mökkiammeemme", model="talossa") == {"mökkiammeessa"}
 assert reinflect("esijuosta", model="katselemme") == {'esijuoksemme'}
 assert reinflect("mökkiammeemme", new_form="+sg+nom") == {'mökkiamme'}
-assert reinflect("möhkö", new_form="+pl+ine+ko") == {'möhköissäkö'}
+assert reinflect("löhkö", new_form="+pl+ine+ko") == {'löhköissäkö'}
 assert reinflect("viinissä", model="talot") == {'viinet'}
 assert reinflect("viinissä", model="talot", orig_form="+sg+ine") == {'viinit'}
 assert reinflect("hömppäämme", model="juokset", pos="verb") == {'hömppäät'}
 assert reinflect("hömppäämme", model="juokset", pos="noun") == {'hömpät'}
 
 from pypykko.utils import analyze
-assert analyze("hätkähtäneet") == [('hätkähtäneet', 'Lexicon', 'hätkähtää', 'verb', '', '', '+past+conneg+pl', 0.0), ('hätkähtäneet', 'Lexicon', 'hätkähtää', 'verb', '', '', '+part_past+pl+nom', 0.0)]
+assert analyze("hätkähtäneet") == [('hätkähtäneet', 'Lexicon', 'hätkähtää', 'verb', '', '', '+past+conneg+pl', 0.0), ('hätkähtäneet', 'Lexicon', 'hätkähtää', 'verb', '', '', '+part_past+pl+nom', 0.0), ('hätkähtäneet', 'Lexicon', 'hätkähtänyt', 'participle', '', ' ← verb:hätkähtää:+part_past', '+pl+nom', 0.0)]
+
+assert analyze("ikäisensä") == [('ikäisensä', 'Lexicon', 'ikäinen', 'adjective', '', '', '+sg+nom+poss3', 0.0), ('ikäisensä', 'Lexicon', 'ikäinen', 'adjective', '', '', '+sg+gen+poss3', 0.0), ('ikäisensä', 'Lexicon', 'ikäinen', 'adjective', '', '', '+pl+nom+poss3', 0.0)]
 
 from pypykko.generate import generate_wordform
 assert generate_wordform("höpönassu", "noun", '+pl+abe+ko') == {'höpönassuittako'}

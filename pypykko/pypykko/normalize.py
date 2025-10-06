@@ -96,7 +96,7 @@ def main():
 
 		if not line and analyses:
 			process_analyses(analyses, sentence_initial)
-			prev_wform, _, _, _, _, _, _, _, _ = analysis
+			prev_wform = analysis[0]
 			sentence_initial = (
 				sentence_initial if prev_wform in LEADING_PUNCTUATION else
 				prev_wform in [SENT_BREAK] + OPENING_TAGS

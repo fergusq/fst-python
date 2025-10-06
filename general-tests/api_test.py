@@ -3,6 +3,7 @@ import kfst
 assert kfst.BACKEND == "kfst_rs"
 from pathlib import Path
 import time
+from immutables import Map
 
 for k in [kfst, kfst_py]:
     
@@ -50,5 +51,102 @@ for k in [kfst, kfst_py]:
         pass
     else:
         assert False
+    
+    # FSTStates can be constructed
+
+    # 1. With and without indices
+
+    assert kfst.transducer.FSTState(state_num=0,
+    path_weight=0,
+    input_indices = tuple()
+    ) == kfst.transducer.FSTState(state_num=0,
+    path_weight=0,
+    )
+
+    # 2. Full parameter list with names matches
+
+    assert kfst.transducer.FSTState(
+        state_num=3,
+        path_weight=12.5,
+        input_flags=Map({"x": (True, "y")}),
+        output_flags=Map({"u": (True, "v")}),
+        output_symbols=(kfst.symbols.SpecialSymbol.EPSILON,),
+        input_indices=(5,)
+    ) == kfst.transducer.FSTState(
+        3,
+        12.5,
+        Map({"x": (True, "y")}),
+        Map({"u": (True, "v")}),
+        (kfst.symbols.SpecialSymbol.EPSILON,),
+        (5,)
+    )
+
+    # 3. Old-style (ie. before adding indices) call OK
+
+    assert kfst.transducer.FSTState(
+        state_num=3,
+        path_weight=12.5,
+        input_flags=Map({"x": (True, "y")}),
+        output_flags=Map({"u": (True, "v")}),
+        output_symbols=(kfst.symbols.SpecialSymbol.EPSILON,),
+        input_indices=tuple()
+    ) == kfst.transducer.FSTState(
+        3,
+        12.5,
+        Map({"x": (True, "y")}),
+        Map({"u": (True, "v")}),
+        (kfst.symbols.SpecialSymbol.EPSILON,),
+    )
+    
+    assert kfst.transducer.FSTState(
+        state_num=3,
+        path_weight=12.5,
+        input_flags=Map({"x": (True, "y")}),
+        output_flags=Map({"u": (True, "v")}),
+        output_symbols=(kfst.symbols.SpecialSymbol.EPSILON,),
+    ) == kfst.transducer.FSTState(
+        3,
+        12.5,
+        Map({"x": (True, "y")}),
+        Map({"u": (True, "v")}),
+        (kfst.symbols.SpecialSymbol.EPSILON,),
+        tuple()
+    )
+
+    print("FSTState items are of valid types")
+
+    assert kfst.transducer.FSTState(
+        state_num=3,
+        path_weight=12.5,
+        input_flags=Map({"x": (True, "y")}),
+        output_flags=Map({"u": (True, "v")}),
+        output_symbols=(kfst.symbols.SpecialSymbol.EPSILON,),
+    ).input_flags == Map({"x": (True, "y")})
+
+    assert kfst.transducer.FSTState(
+        state_num=3,
+        path_weight=12.5,
+        input_flags=Map({"x": (True, "y")}),
+        output_flags=Map({"u": (True, "v")}),
+        output_symbols=(kfst.symbols.SpecialSymbol.EPSILON,),
+    ).output_flags == Map({"u": (True, "v")})
+
+    assert kfst.transducer.FSTState(
+        state_num=3,
+        path_weight=12.5,
+        input_flags=Map({"x": (True, "y")}),
+        output_flags=Map({"u": (True, "v")}),
+        output_symbols=(kfst.symbols.SpecialSymbol.EPSILON, kfst.symbols.SpecialSymbol.UNKNOWN, kfst.symbols.SpecialSymbol.IDENTITY),
+    ).output_symbols == (kfst.symbols.SpecialSymbol.EPSILON, kfst.symbols.SpecialSymbol.UNKNOWN, kfst.symbols.SpecialSymbol.IDENTITY)
+
+    assert kfst.transducer.FSTState(
+        state_num=3,
+        path_weight=12.5,
+        input_flags=Map({"x": (True, "y")}),
+        output_flags=Map({"u": (True, "v")}),
+        output_symbols=(kfst.symbols.SpecialSymbol.EPSILON, kfst.symbols.SpecialSymbol.UNKNOWN, kfst.symbols.SpecialSymbol.IDENTITY),
+        input_indices=(10, 20, 30),
+    ).input_indices == (10, 20, 30)
+
 
     print(f"Total {time.time() - t:0.2f} seconds.")

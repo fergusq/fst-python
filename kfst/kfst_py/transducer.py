@@ -35,9 +35,36 @@ class FSTState(NamedTuple):
     input_flags: Map[str, tuple[bool, str]] = Map()
     output_flags: Map[str, tuple[bool, str]] = Map()
     output_symbols: tuple[Symbol, ...] = tuple()
+    input_indices: tuple[int, ...] | None = tuple()
 
     def __repr__(self):
-        return f"FSTState({self.state_num}, {self.path_weight}, {self.input_flags}, {self.output_flags}, {self.output_symbols})"
+        return f"FSTState({self.state_num}, {self.path_weight}, {self.input_flags}, {self.output_flags}, {self.output_symbols}, {self.input_indices})"
+    
+    def strip_indices(self):
+        if self.input_indices is None:
+            return self
+        else:
+            return FSTState(
+                state_num=self.state_num,
+                path_weight=self.path_weight,
+                input_flags=self.input_flags,
+                output_flags=self.output_flags,
+                output_symbols=self.output_symbols,
+                input_indices=None
+            )
+    
+    def ensure_indices(self):
+        if self.input_indices is not None:
+            return self
+        else:
+            return FSTState(
+                state_num=self.state_num,
+                path_weight=self.path_weight,
+                input_flags=self.input_flags,
+                output_flags=self.output_flags,
+                output_symbols=self.output_symbols,
+                input_indices=(0,) * len(self.output_symbols)
+            )
 
 
 class FST(NamedTuple):
@@ -181,34 +208,50 @@ class FST(NamedTuple):
         
         return ans
 
-    def run_fst(self, input_symbols: list[Symbol], state=FSTState(0), post_input_advance=False) -> Generator[tuple[bool, bool, FSTState], None, None]:
+    def run_fst(self, input_symbols: list[Symbol], state=FSTState(0), post_input_advance=False, input_symbol_index: int | None = None, keep_non_final: bool = True) -> Generator[tuple[bool, bool, FSTState], None, None]:
         """
         Runs the FST on the given input symbols, starting from the given state (by default 0).
         Yields an (bool, FSTState) tuple for each path. If the path ended in a final state, the bool will be True, otherwise False.
+
+        input_symbol_index is the index into input_symbols that is being processed (notably this affects the alignment of output and input symbols)
+
+        keep_non_final instructs on whether to filter out non-finishing states at runtime. If it is set to True, non-finishing states are returned. Setting it to false is more efficient than post-filtering.
+
+        post_input_advance tells whether this invocation is performing a final epsilon expansion after the input (returned as the second member of output tuples)
         """
+
+        # This is None-able for the sake of making it optional on the rust-side
+        input_symbol_index = 0 if input_symbol_index is None else input_symbol_index
         transitions = self.rules.get(state.state_num, {})
-        if not input_symbols:
-            yield state.state_num in self.final_states, post_input_advance, state._replace(path_weight=state.path_weight + self.final_states.get(state.state_num, 0))
+        if len(input_symbols) == input_symbol_index:
+            if state.state_num in self.final_states or keep_non_final:
+                yield state.state_num in self.final_states, post_input_advance, state._replace(path_weight=state.path_weight + self.final_states.get(state.state_num, 0))
             isymbol = None
 
         else:
-            isymbol = input_symbols[0]
+            isymbol = input_symbols[input_symbol_index]
+        
+        assert len(input_symbols) >= input_symbol_index # Catastrophic failure
 
         for transition_isymbol in transitions:
             if transition_isymbol.is_epsilon() or isymbol is not None and transition_isymbol == isymbol:
-                yield from self._transition(input_symbols, state, transitions[transition_isymbol], isymbol, transition_isymbol)
+                yield from self._transition(input_symbols, state, transitions[transition_isymbol], isymbol, transition_isymbol, input_symbol_index, keep_non_final=keep_non_final)
         
         if isymbol is not None and isymbol.is_unknown():
             if SpecialSymbol.UNKNOWN in transitions:
-                yield from self._transition(input_symbols, state, transitions[SpecialSymbol.UNKNOWN], isymbol, SpecialSymbol.UNKNOWN)
+                yield from self._transition(input_symbols, state, transitions[SpecialSymbol.UNKNOWN], isymbol, SpecialSymbol.UNKNOWN, input_symbol_index, keep_non_final=keep_non_final)
             
             if SpecialSymbol.IDENTITY in transitions:
-                yield from self._transition(input_symbols, state, transitions[SpecialSymbol.IDENTITY], isymbol, SpecialSymbol.IDENTITY)
+                yield from self._transition(input_symbols, state, transitions[SpecialSymbol.IDENTITY], isymbol, SpecialSymbol.IDENTITY, input_symbol_index, keep_non_final=keep_non_final)
     
-    def _transition(self, input_symbols: list[Symbol], state: FSTState, transitions: list[tuple[int, Symbol, float]], isymbol: Symbol | None, transition_isymbol: Symbol) -> Generator[tuple[bool, bool, FSTState], None, None]:
+    def _transition(self, input_symbols: list[Symbol], state: FSTState, transitions: list[tuple[int, Symbol, float]], isymbol: Symbol | None, transition_isymbol: Symbol, input_symbol_index: int | None = None, keep_non_final: bool = True) -> Generator[tuple[bool, bool, FSTState], None, None]:
+        
+        # This is None-able for the sake of making it optional on the rust-side
+        input_symbol_index = 0 if input_symbol_index is None else input_symbol_index
+        
         for next_state, osymbol, weight in transitions:
             if self.debug:
-                print(state.state_num, "->", next_state, transition_isymbol, osymbol, input_symbols, state)
+                print(state.state_num, "->", next_state, transition_isymbol, osymbol, input_symbols, input_symbol_index, state)
             
             new_output_flags = self._update_flags(osymbol, state.output_flags)
             if new_output_flags is None:
@@ -218,21 +261,30 @@ class FST(NamedTuple):
             if new_input_flags is None:
                 continue  # flag unification failed
 
-            o = (isymbol,) if isymbol is not None and osymbol == SpecialSymbol.IDENTITY else (osymbol,) if not osymbol.is_epsilon() else ()
+            if osymbol.is_epsilon():
+                o = ()
+                new_input_indices = state.input_indices
+            else:
+                o = (isymbol,) if isymbol is not None and osymbol == SpecialSymbol.IDENTITY else (osymbol,) if not osymbol.is_epsilon() else ()
+                if state.input_indices is not None:
+                    new_input_indices = state.input_indices + (input_symbol_index,)
+                else:
+                    new_input_indices = None
 
             new_state = FSTState(
                 state_num=next_state,
                 path_weight=state.path_weight + weight,
                 input_flags=new_input_flags,
                 output_flags=new_output_flags,
+                input_indices=new_input_indices,
                 output_symbols=state.output_symbols + o
             )
 
             if transition_isymbol.is_epsilon():
-                yield from self.run_fst(input_symbols, state=new_state, post_input_advance=len(input_symbols) == 0)
+                yield from self.run_fst(input_symbols, state=new_state, post_input_advance=len(input_symbols) == input_symbol_index, input_symbol_index=input_symbol_index, keep_non_final=keep_non_final)
             
             else:
-                yield from self.run_fst(input_symbols[1:], state=new_state)
+                yield from self.run_fst(input_symbols, state=new_state, input_symbol_index=input_symbol_index+1, keep_non_final=keep_non_final)
     
     def lookup(self, input: str, state=FSTState(0), allow_unknown=True) -> Generator[tuple[str, float], None, None]:
         """
@@ -249,16 +301,42 @@ class FST(NamedTuple):
         if input_symbols is None:
             raise TokenizationException("Input cannot be split into symbols")
 
-        results = self.run_fst(input_symbols, state=state)
+        results = self.run_fst(input_symbols, state=state.strip_indices(), input_symbol_index=0, keep_non_final=False)
         results = sorted(results, key=lambda x: x[2].path_weight)
         already_seen = set()
-        for finished, _, state in results:
-            if not finished:
-                continue
-
+        for _, _, state in results:
             w = state.path_weight
             os = state.output_symbols
             o = "".join(s.get_symbol() for s in os)
+            if o not in already_seen:
+                yield o, w
+                already_seen.add(o)
+    
+    def lookup_aligned(self, input: str, state=FSTState(0), allow_unknown=True) -> Generator[tuple[tuple[tuple[int, Symbol], ...], float], None, None]:
+        """
+        Runs the FST on the given input symbols, starting from the given state (by default 0).
+        Yields a tuple of (output_symbols, path_weight) for each successful path.
+        
+        Otherwise same as run_fst, but operates on strings instead of symbol lists, filters out duplicate outputs and sorts the results by weight.
+
+        Raises a TokenizationException if the input string can not be converted into the symbols of the KFST transducer.
+        Note that if allow_unknown is True, all strings will be tokenized successfully.
+        """
+
+        input_symbols = self.split_to_symbols(input, allow_unknown=allow_unknown)
+        if input_symbols is None:
+            raise TokenizationException("Input cannot be split into symbols")
+
+        if state.input_indices is None:
+            raise ValueError(f"lookup_aligned refuses to work with states with input_indices=None (passed state {state}). Manually convert it to an indexed state by calling ensure_indices()")
+
+        results = self.run_fst(input_symbols, state=state, input_symbol_index=0, keep_non_final=False)
+        results = sorted(results, key=lambda x: x[2].path_weight)
+        already_seen = set()
+        for _, _, state in results:
+            w = state.path_weight
+            assert state.input_indices is not None
+            o = tuple(zip(state.input_indices, state.output_symbols))
             if o not in already_seen:
                 yield o, w
                 already_seen.add(o)
