@@ -212,12 +212,18 @@ class FST(NamedTuple):
         """
         Runs the FST on the given input symbols, starting from the given state (by default 0).
         Yields an (bool, FSTState) tuple for each path. If the path ended in a final state, the bool will be True, otherwise False.
+
+        input_symbol_index is the index into input_symbols that is being processed (notably this affects the alignment of output and input symbols)
+
+        keep_non_final instructs on whether to filter out non-finishing states at runtime. If it is set to True, non-finishing states are returned. Setting it to false is more efficient than post-filtering.
+
+        post_input_advance tells whether this invocation is performing a final epsilon expansion after the input (returned as the second member of output tuples)
         """
 
         # This is None-able for the sake of making it optional on the rust-side
         input_symbol_index = 0 if input_symbol_index is None else input_symbol_index
         transitions = self.rules.get(state.state_num, {})
-        if len(input_symbols) - input_symbol_index == 0:
+        if len(input_symbols) == input_symbol_index:
             if state.state_num in self.final_states or keep_non_final:
                 yield state.state_num in self.final_states, post_input_advance, state._replace(path_weight=state.path_weight + self.final_states.get(state.state_num, 0))
             isymbol = None
@@ -225,7 +231,7 @@ class FST(NamedTuple):
         else:
             isymbol = input_symbols[input_symbol_index]
         
-        assert len(input_symbols) - input_symbol_index >= 0 # Catastrophic failure
+        assert len(input_symbols) >= input_symbol_index # Catastrophic failure
 
         for transition_isymbol in transitions:
             if transition_isymbol.is_epsilon() or isymbol is not None and transition_isymbol == isymbol:
@@ -265,9 +271,6 @@ class FST(NamedTuple):
                 else:
                     new_input_indices = None
 
-            if osymbol.is_epsilon():
-                assert len(o) == 0, o
-
             new_state = FSTState(
                 state_num=next_state,
                 path_weight=state.path_weight + weight,
@@ -278,7 +281,7 @@ class FST(NamedTuple):
             )
 
             if transition_isymbol.is_epsilon():
-                yield from self.run_fst(input_symbols, state=new_state, post_input_advance=len(input_symbols)-input_symbol_index == 0, input_symbol_index=input_symbol_index, keep_non_final=keep_non_final)
+                yield from self.run_fst(input_symbols, state=new_state, post_input_advance=len(input_symbols) == input_symbol_index, input_symbol_index=input_symbol_index, keep_non_final=keep_non_final)
             
             else:
                 yield from self.run_fst(input_symbols, state=new_state, input_symbol_index=input_symbol_index+1, keep_non_final=keep_non_final)
@@ -298,7 +301,7 @@ class FST(NamedTuple):
         if input_symbols is None:
             raise TokenizationException("Input cannot be split into symbols")
 
-        results = self.run_fst(input_symbols, state=state, input_symbol_index=0, keep_non_final=False)
+        results = self.run_fst(input_symbols, state=state.strip_indices(), input_symbol_index=0, keep_non_final=False)
         results = sorted(results, key=lambda x: x[2].path_weight)
         already_seen = set()
         for _, _, state in results:
@@ -324,7 +327,8 @@ class FST(NamedTuple):
         if input_symbols is None:
             raise TokenizationException("Input cannot be split into symbols")
 
-        assert state.input_indices is not None, f"lookup_aligned refuses to work with states with input_indices=None (passed state {state}). Manually convert it to an indexed state by calling ensure_indices()"
+        if state.input_indices is None:
+            raise ValueError(f"lookup_aligned refuses to work with states with input_indices=None (passed state {state}). Manually convert it to an indexed state by calling ensure_indices()")
 
         results = self.run_fst(input_symbols, state=state, input_symbol_index=0, keep_non_final=False)
         results = sorted(results, key=lambda x: x[2].path_weight)

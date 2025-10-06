@@ -3333,11 +3333,11 @@ impl FST {
         state: FSTState,
         allow_unknown: bool,
     ) -> KFSTResult<Vec<(Vec<(usize, Symbol)>, f64)>> {
-        use pyo3::exceptions::PyAssertionError;
+        use pyo3::exceptions::PyValueError;
 
         match state.payload {
             Ok(p) => self._lookup_aligned(input, p, allow_unknown),
-            Err(p) => PyResult::Err(PyErr::new::<PyAssertionError, _>(
+            Err(p) => PyResult::Err(PyErr::new::<PyValueError, _>(
                 format!("lookup_aligned refuses to work with states with input_indices=None (passed state {}). Manually convert it to an indexed state by calling ensure_indices()", p.__repr__())
             )),
         }
