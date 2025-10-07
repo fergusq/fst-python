@@ -1,6 +1,18 @@
 from .utils import PARSER_FST, compare_with_others, inf
+from typing import NamedTuple
 
-def analyze_with_compound_parts(word, only_best=True, normalize_separators=True, ignore_derivatives=True):
+class RangedPykkoAnalysis(NamedTuple):
+	wordform: str
+	source: str
+	lemma: str
+	pos: str
+	homonym: str
+	info: str
+	morphtags: str
+	weight: float
+	ranges: tuple[range, ...]
+
+def analyze_with_compound_parts(word, only_best=True, normalize_separators=True, ignore_derivatives=True) -> list[RangedPykkoAnalysis]:
 	"""
 	Return list of tuples (morphological analyses) with duplicates removed.
 	Only best analyses are returned by default.
@@ -74,7 +86,7 @@ def analyze_with_compound_parts(word, only_best=True, normalize_separators=True,
 				tightened_ranges[i] = range(tightened_ranges[i].start+1, tightened_ranges[i].stop)
 				tightened_ranges[i-1] = range(tightened_ranges[i-1].start, tightened_ranges[i-1].stop+1)
 
-		filtered.append(tuple(analysis) + (tuple(tightened_ranges),))
+		filtered.append(RangedPykkoAnalysis(*analysis, tuple(tightened_ranges))) # type: ignore
 		best = weight
 
 	return filtered
