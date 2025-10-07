@@ -3,7 +3,7 @@
 PyPykko is a wrapper around [pykko](https://github.com/pkauppin/pykko). It provides the basic analysis and generation API in an easily installable package.
 PyPykko can be installed without compiling anything (as the transducers are pre-compiled) or pulling in any native dependencies (such as hfst).
 
-This package contains (slightly modified for kfst compatibility versions of) all the files in the tools directory of pykko as well as constants.py and file\_tools.py from the scripts directory and utils.py from the scripts directory as scriptutils.py. It also provides the novel reinflect.py and extras.py.
+This package contains (slightly modified for kfst compatibility versions of) all the files in the tools directory of pykko as well as constants.py and file\_tools.py from the scripts directory and utils.py from the scripts directory as scriptutils.py. It also provides the novel reinflect.py and extras.py. The function `utils.analyze` returns a `NamedTuple` as opposed to the unnamed tuple returned by upstream Pykko as of writing.
 
 ## Installation
 
@@ -49,41 +49,48 @@ There are two main Python methods `utils.analyze` and `generate.generate_wordfor
 ```py
 >>> from pypykko.utils import analyze
 >>> analyze("hätkähtäneet")
-[('hätkähtäneet', 'Lexicon', 'hätkähtää', 'verb', '', '', '+past+conneg+pl', 0.0), ('hätkähtäneet', 'Lexicon', 'hätkähtää', 'verb', '', '', '+part_past+pl+nom', 0.0)]
-```
+[PykkoAnalysis(wordform='hätkähtäneet', source='Lexicon', lemma='hätkähtää', pos='verb', homonym='', info='', morphtags='+past+conneg+pl', weight=0.0),
+ PykkoAnalysis(wordform='hätkähtäneet', source='Lexicon', lemma='hätkähtää', pos='verb', homonym='', info='', morphtags='+part_past+pl+nom', weight=0.0),
+ PykkoAnalysis(wordform='hätkähtäneet', source='Lexicon', lemma='hätkähtänyt', pos='participle', homonym='', info=' ← verb:hätkähtää:+part_past', morphtags='+pl+nom', weight=0.0)]
+ ```
 
 The fields of the outcoming tuple are:
 
-1. Surface form (input as it is given)
-2. The source of the word: eg. `Lexicon` if it is a word known ahead of time, `Guesser|Any` for unknown words and `Lexicon|Pfx` for words analyzed as the compounds of known words.
-3. The lemma form of the word; notably this can contain pipe symbols to delimit compound parts: `ilma|luukku`. Sometimes Finnish has infix inflection, and the compound parts can be separately inflected (eg. `uudenvuoden` -> `uusi|vuosi`).
-4. The part of speech of the word.
-5. The homonym number of the word (can be empty). Eg. the word viini has two senses that have slightly different inflection: wine (viini -> viinin) and quiver (viini -> viinen). In cases where such homonyms exist but it is impossible to tell which form is presented (the nominative form viini here), we get both interpretations:
-```
-[('viini', 'Lexicon', 'viini', 'noun', '1', '', '+sg+nom', 0.0), ('viini', 'Lexicon', 'viini', 'noun', '2', '', '+sg+nom', 0.0)]
+* `wordform`: Surface form (input as it is given)
+* `source`: The source of the word: eg. `Lexicon` if it is a word known ahead of time, `Guesser|Any` for unknown words and `Lexicon|Pfx` for words analyzed as the compounds of known words.
+* `lemma`: The lemma form of the word; notably this can contain pipe symbols to delimit compound parts: `ilma|luukku`. Sometimes Finnish has infix inflection, and the compound parts can be separately inflected (eg. `uudenvuoden` -> `uusi|vuosi`).
+* `pos`: The part of speech of the word.
+* `homonym`: The homonym number of the word (can be empty). Eg. the word viini has two senses that have slightly different inflection: wine (viini -> viinin) and quiver (viini -> viinen). In cases where such homonyms exist but it is impossible to tell which form is presented (the nominative form viini here), we get both interpretations:
+```py
+[PykkoAnalysis(wordform='viini', source='Lexicon', lemma='viini', pos='noun', homonym='1', info='', morphtags='+sg+nom', weight=0.0),
+ PykkoAnalysis(wordform='viini', source='Lexicon', lemma='viini', pos='noun', homonym='2', info='', morphtags='+sg+nom', weight=0.0)]
 ```
 In cases where the form is unambiguous (eg. viinen), we get only the homonym number that is relevant:
-```
-[('viinen', 'Lexicon', 'viini', 'noun', '2', '', '+sg+gen', 0.0)]
+```py
+[PykkoAnalysis(wordform='viinen', source='Lexicon', lemma='viini', pos='noun', homonym='2', info='', morphtags='+sg+gen', weight=0.0)]
 ```
 In cases where the homonym is different in different interpretations, we get annotated interpretations:
+```py
+[PykkoAnalysis(wordform='viinin', source='Lexicon', lemma='viini', pos='noun', homonym='2', info='', morphtags='+pl+ins', weight=0.0),
+ PykkoAnalysis(wordform='viinin', source='Lexicon', lemma='viini', pos='noun', homonym='1', info='', morphtags='+sg+gen', weight=0.0)]
 ```
-[('viinin', 'Lexicon', 'viini', 'noun', '2', '', '+pl+ins', 0.0), ('viinin', 'Lexicon', 'viini', 'noun', '1', '', '+sg+gen', 0.0)]
-```
-6. Register annotation, eg:
-```
+* `info`: Either a register annotation or information on a derivation, eg:
+```py
 >>> analyze("höpsöillä")
-[('höpsöillä', 'Lexicon', 'höpsö', 'noun', '', '⟨coll⟩', '+pl+ade', 0.0), ('höpsöillä', 'Lexicon', 'höpsö', 'adjective', '', '⟨coll⟩', '+pl+ade', 0.0)]
+[PykkoAnalysis(wordform='höpsöillä', source='Lexicon', lemma='höpsö', pos='noun', homonym='', info='⟨coll⟩', morphtags='+pl+ade', weight=0.0), PykkoAnalysis(wordform='höpsöillä', source='Lexicon', lemma='höpsö', pos='adjective', homonym='', info='⟨coll⟩', morphtags='+pl+ade', weight=0.0)]
+>>> analyze("kulkenut")
+[PykkoAnalysis(wordform='kulkenut', source='Lexicon', lemma='kulkea', pos='verb', homonym='', info='', morphtags='+past+conneg+sg', weight=0.0), PykkoAnalysis(wordform='kulkenut', source='Lexicon', lemma='kulkea', pos='verb', homonym='', info='', morphtags='+part_past+sg+nom', weight=0.0), PykkoAnalysis(wordform='kulkenut', source='Lexicon', lemma='kulkenut', pos='participle', homonym='', info=' ← verb:kulkea:+part_past', morphtags='+sg+nom', weight=0.0)]
 ```
-7. Morphological tags that name the inflectional form.
+* `morphtags`: Morphological tags that name the inflectional form.
+* `weight`: The weight of this analysis per the FST. Generally, lower weights are more probable.
 
 `extras.analyze\_with\_compound\_parts` is of use when it is useful to know the exact inflected forms of the compound parts of a word.
 Eg. when looking at "isonvarpaan", one might want to not only know that it is the compound of "iso" and "varvas" but also that they are in the forms "ison" and "varpaan".
 `extras.anlyze\_with\_compound\_parts` returns the character ranges matching compound parts.
 
-```
+```py
 >>> analyze_with_compound_parts("isonvarpaan")
-('isonvarpaan', 'Lexicon', 'iso|varvas', 'noun', '', '', '+sg+gen', 0.0, (range(0, 4), range(4, 11)))
+[RangedPykkoAnalysis(wordform='isonvarpaan', source='Lexicon', lemma='iso|varvas', pos='noun', homonym='', info='', morphtags='+sg+gen', weight=0.0, ranges=(range(0, 4), range(4, 11)))]
 ```
 
 ### generate.generate\_wordform
