@@ -12,20 +12,12 @@ def get_filepath(filename, directory):
 
 
 def read_tsv(filename, directory=''):
-
 	filename = get_filepath(filename, directory)
-
-	table = []
-	with open(filename, 'r') as file:
-		for line in file:
-			line = line.strip('\n')
-			if not line:
-				continue
-			if line.startswith('#'):
-				continue
-			row = ['' if val == '-' else val for val in line.split('\t')]
-			table.append(row)
-	return table
+	for line in read_list(filename):
+		if line.startswith('#'):
+			continue
+		row = ['' if val == '-' else val for val in line.split('\t')]
+		yield row
 
 
 def read_list_tsv(filename):
@@ -52,13 +44,18 @@ def save_txt(filename, text: str, directory=''):
 
 def read_list(filename, directory=''):
 	filename = get_filepath(filename, directory)
-	return [s for s in read_txt(filename).splitlines() if s]
+	with open(filename, 'r') as file:
+		for line in file:
+			line = line.strip('\n\r')
+			if not line:
+				continue
+			yield line
 
 
 def save_list(filename, items: list, sort=True, directory=''):
 	filename = get_filepath(filename, directory)
 	items = sorted(items) if sort else items
-	return save_txt(filename, '\n'.join(items))
+	return save_txt(filename, ''.join(f'{item}\n' for item in items))
 
 
 def load_json(filename, directory=''):

@@ -1,7 +1,7 @@
 #! /usr/bin/env python3
 
 """
-Tokenize text.
+Text tokenization.
 For testing/debugging purposes only.
 """
 
@@ -25,30 +25,31 @@ REGEX_CLOCK = r'(?:[0-9]?[0-9][:.][0-9][0-9])'
 REGEX_HASHTAG = r'#[A-Za-z0-9_]+'
 REGEX_HANDLE = r'@[A-Za-z0-9_]+'
 REGEX_REDDIT = r'r/[A-Za-z0-9_]+|u/[A-Za-z0-9_]+'
-REGEX_THOUSANDS = r'[1-9][0-9]?[0-9]?(?: [0-9][0-9][0-9])+(?:-[a-zåäö-]+)?'
-REGEX_THOUSANDS_RANGE = r'[1-9][0-9]?[0-9]?(?: [0-9][0-9][0-9])+[-–][1-9][0-9]?[0-9]?(?: [0-9][0-9][0-9])+'
+REGEX_THOUSANDS = r'[1-9][0-9]?[0-9]?(?:[  ][0-9][0-9][0-9])+(?:-[a-zåäö-]+)?'
+REGEX_THOUSANDS_RANGE = r'[1-9][0-9]?[0-9]?(?:[  ][0-9][0-9][0-9])+[-–][1-9][0-9]?[0-9]?(?:[  ][0-9][0-9][0-9])+'
 REGEX_XML_ELEM = r'<[^<>]+>'
 REGEX_HTML_ENTITY = r'&[^;\s]+;'
-# REGEX_URL = '(?:https?://|file:///)[a-z0-9](?:[.][a-z0-9][a-z0-9]+)+'
-# REGEX_EMAIL = '(?:https?://|file:///)[a-z0-9](?:[.][a-z0-9][a-z0-9]+)+'
-# REGEX_CHORD = 'xxx'
-# REGEX_IUPAC_NAME = 'xxx'
+REGEX_URL = r'(?:https?://|file:///|www\.)(?:[a-z0-9]+\.)+\S+[^ \t\n)(:;,.]'
+# REGEX_IUPAC_NAME = r'...'
 
-REGEX_ALL = f'{LINE_BREAK}' \
-			f'{REGEX_UNITS}|' \
-			f'{REGEX_EMOTICON}|' \
-			f'{REGEX_ABBREV}|' \
-			f'{REGEX_INITIAL}|' \
-			f'{REGEX_ORDINAL}|' \
-			f'{REGEX_DATE}|' \
-			f'{REGEX_CLOCK}|' \
-			f'{REGEX_HASHTAG}|' \
-			f'{REGEX_HANDLE}|' \
-			f'{REGEX_REDDIT}|' \
-			f'{REGEX_THOUSANDS}|' \
-			f'{REGEX_THOUSANDS_RANGE}|' \
-			f'{REGEX_XML_ELEM}|' \
-			f'{REGEX_HTML_ENTITY}'
+REGEX_ALL = '|'.join((
+	LINE_BREAK,
+	REGEX_UNITS,
+	REGEX_EMOTICON,
+	REGEX_ABBREV,
+	REGEX_INITIAL,
+	REGEX_ORDINAL,
+	REGEX_DATE,
+	REGEX_CLOCK,
+	REGEX_HASHTAG,
+	REGEX_HANDLE,
+	REGEX_REDDIT,
+	REGEX_THOUSANDS,
+	REGEX_THOUSANDS_RANGE,
+	REGEX_XML_ELEM,
+	REGEX_HTML_ENTITY,
+	REGEX_URL,
+))
 
 PUNCT_HEAD = '\t\n (/"“”„¿¡‹«»{[\'’'
 PUNCT_TAIL = '\t\n .…,;?!)/"“”„›»}\\]\'’'
@@ -74,6 +75,7 @@ def text2tokens(text):
 		separated = head + tail[::-1]
 		return separated
 
+	text = re.sub('^( *[-–—])([A-ZÅÄÖ])', r'\1 \2', text)
 	text = f' {text} '
 	text = re.sub(rf'({REGEX_XML_ELEM})', r' \1 ', text)
 	text = text.replace('\n\n', f' {LINE_BREAK} ')
@@ -145,10 +147,5 @@ def tokenize(text):
 
 if __name__ == '__main__':
 	for line in sys.stdin:
-		line = line.replace('&amp; ', '&').replace('&lt; ', '<').replace('&gt; ', '>')
+		# line = line.replace('&amp; ', '&').replace('&lt; ', '<').replace('&gt; ', '>')
 		print(tokenize(line), end="")
-
-
-
-
-

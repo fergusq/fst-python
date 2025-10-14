@@ -6,7 +6,7 @@ from .constants import SENT_BREAK, OPENING_TAGS
 
 inf = float('inf')
 indices = defaultdict(float)
-LEADING_PUNCTUATION = set('-–—"”„’([')
+LEADING_PUNCTUATION = set('-–—"”“‟„’([')
 
 
 def is_lowercase(w):
@@ -60,8 +60,8 @@ def process_analyses(analyses, sentence_initial=None):
 		# if '+ins' in tags or '+com' in tags:
 		# 	weight += 0.5
 
-		# if not sentence_initial:
-		# 	lemma = fix_lettercase(wform, lemma)
+		if not sentence_initial and is_uppercase(wform) and is_lowercase(lemma) and pos.startswith('noun'):
+			lemma = fix_lettercase(wform, lemma)
 
 		index = indices[lemma, pos] or inf
 		pair = weight, index
@@ -87,16 +87,23 @@ def process_analyses(analyses, sentence_initial=None):
 def main():
 
 	analyses = []
-	analysis = '', '', '', '', ''
+	analysis = '', '', '', '', '', '', '', inf
 	sentence_initial = True
+	prev_wform = ''
 
 	for line in sys.stdin:
 
 		line = line.strip('\n\r')
 
 		if not line and analyses:
+
+			wform, _, _, _, _, _, _, _ = analysis
+			if prev_wform == ':' and wform in '"”„':
+				sentence_initial = True
+
 			process_analyses(analyses, sentence_initial)
-			prev_wform = analysis[0]
+
+			prev_wform = wform
 			sentence_initial = (
 				sentence_initial if prev_wform in LEADING_PUNCTUATION else
 				prev_wform in [SENT_BREAK] + OPENING_TAGS
