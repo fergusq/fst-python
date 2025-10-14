@@ -78,14 +78,14 @@ def compare_with_others(a_source, analyses):
 	return
 
 class PykkoAnalysis(NamedTuple):
-       wordform: str
-       source: str
-       lemma: str
-       pos: str
-       homonym: str
-       info: str
-       morphtags: str
-       weight: float
+	wordform: str
+	source: str
+	lemma: str
+	pos: str
+	homonym: str
+	info: str
+	morphtags: str
+	weight: float
 
 def analyze(word, only_best=True, normalize_separators=True, ignore_derivatives=True) -> list[PykkoAnalysis]:
 
