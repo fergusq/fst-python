@@ -1,6 +1,7 @@
 import re
 from .constants import PARSER_FST_PATH, FIELD_STRING
 import kfst
+from typing import NamedTuple
 
 C = "[bcdfghjklmnpqrstvwxzšžčśźćń'’]"
 V = '[aeiouyäöüåáéíóúâêîôûãø]'
@@ -76,8 +77,17 @@ def compare_with_others(a_source, analyses):
 
 	return
 
+class PykkoAnalysis(NamedTuple):
+       wordform: str
+       source: str
+       lemma: str
+       pos: str
+       homonym: str
+       info: str
+       morphtags: str
+       weight: float
 
-def analyze(word, only_best=True, normalize_separators=True, ignore_derivatives=True):
+def analyze(word, only_best=True, normalize_separators=True, ignore_derivatives=True) -> list[PykkoAnalysis]:
 
 	"""
 	Return list of tuples (morphological analyses) with duplicates removed.
@@ -117,7 +127,7 @@ def analyze(word, only_best=True, normalize_separators=True, ignore_derivatives=
 
 	filtered = filtered or [([word] + unk_result(word).split('\t') + [inf])]
 
-	return [tuple(a) for a in filtered]
+	return [PykkoAnalysis(*a) for a in filtered]
 
 
 def add_compound_separators(word, pos=None, normalize_separators=True, pick_first=False):
