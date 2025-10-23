@@ -4025,6 +4025,18 @@ mod tests {
                 ]
         );
     }
+
+    
+
+    #[test]
+    fn parallelism_does_not_kill_it() {
+        use rayon::prelude::*;
+        let fst = FST::from_kfst_file("../pypykko/pypykko/fi-parser.kfst".to_string(), false).unwrap();
+        let mut muskettisoturit = String::new();
+        File::open("muskettisoturit.txt").unwrap().read_to_string(&mut muskettisoturit).unwrap();
+        let sanat = muskettisoturit.split_ascii_whitespace().map(|x| x.to_string()).collect::<Vec<String>>();
+        sanat.par_iter().map(|sana| fst.lookup(sana, FSTState::<()>::default(), true)).collect::<Vec<_>>();
+    }
 }
 
 /// A Python module implemented in Rust.
