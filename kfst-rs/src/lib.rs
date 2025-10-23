@@ -156,6 +156,7 @@ fn deintern(idx: u32) -> String {
 
 /// Perform an operation on the string nterned at idx
 /// Notably: the read lock is held for the whole duration of the operation.
+/// Never nest these!
 fn with_deinterned<F, X>(idx: u32, f: F) -> X
 where
     F: FnOnce(&str) -> X,
@@ -533,15 +534,21 @@ impl PartialOrd for StringSymbol {
 
 impl Ord for StringSymbol {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        with_deinterned(other.string, |other_str| {
-            with_deinterned(self.string, |self_str| {
-                (other_str.chars().count(), &self_str, self.unknown).cmp(&(
-                    self_str.chars().count(),
-                    &other_str,
-                    other.unknown,
-                ))
-            })
-        })
+
+        // Complex and ugly, but we do not want to nest with_deinterned; unlock only once
+
+        let lock_guard = STRING_INTERNER
+        .read()
+        .unwrap();
+        let other_str = lock_guard.get_index(other.string.try_into().unwrap())
+        .unwrap();
+        let self_str = lock_guard.get_index(self.string.try_into().unwrap())
+        .unwrap();
+        (other_str.chars().count(), &self_str, self.unknown).cmp(&(
+            self_str.chars().count(),
+            &other_str,
+            other.unknown,
+        ))
     }
 }
 #[cfg_attr(feature = "python", pymethods)]
@@ -782,11 +789,14 @@ impl FlagDiacriticSymbol {
     pub fn get_symbol(&self) -> String {
         match self.value {
             u32::MAX => with_deinterned(self.key, |key| format!("@{:?}.{}@", self.flag_type, key)),
-            value => with_deinterned(self.key, |key| {
-                with_deinterned(value, |value| {
-                    format!("@{:?}.{}.{}@", self.flag_type, key, value)
-                })
-            }),
+            value => {
+                let lock_guard = STRING_INTERNER
+                .read()
+                .unwrap();
+                let key = lock_guard.get_index(self.key.try_into().unwrap()).unwrap();
+                let value = lock_guard.get_index(value.try_into().unwrap()).unwrap();
+                format!("@{:?}.{}.{}@", self.flag_type, key, value)
+            },
         }
     }
 
@@ -827,14 +837,14 @@ impl FlagDiacriticSymbol {
             u32::MAX => with_deinterned(self.key, |key| {
                 format!("FlagDiacriticSymbol({:?}, {:?})", self.flag_type, key)
             }),
-            value => with_deinterned(self.key, |key| {
-                with_deinterned(value, |value| {
-                    format!(
-                        "FlagDiacriticSymbol({:?}, {:?}, {:?})",
-                        self.flag_type, key, value
-                    )
-                })
-            }),
+            value => {
+                let lock_guard = STRING_INTERNER
+                .read()
+                .unwrap();
+                let key = lock_guard.get_index(self.key.try_into().unwrap()).unwrap();
+                let value = lock_guard.get_index(value.try_into().unwrap()).unwrap();
+                format!("FlagDiacriticSymbol({:?}, {:?}, {:?})", self.flag_type, key, value)
+            },
         }
     }
 
@@ -922,10 +932,16 @@ impl SpecialSymbol {
     where
         F: FnOnce(&str) -> X,
     {
+        f(self.get_symbol_ptr())
+    }
+
+    /// Get pointer to symbol &str with static lifetime
+    fn get_symbol_ptr(&self) -> &'static str
+    {
         match self {
-            SpecialSymbol::EPSILON => f("@_EPSILON_SYMBOL_@"),
-            SpecialSymbol::IDENTITY => f("@_IDENTITY_SYMBOL_@"),
-            SpecialSymbol::UNKNOWN => f("@_UNKNOWN_SYMBOL_@"),
+            SpecialSymbol::EPSILON => "@_EPSILON_SYMBOL_@",
+            SpecialSymbol::IDENTITY => "@_IDENTITY_SYMBOL_@",
+            SpecialSymbol::UNKNOWN => "@_UNKNOWN_SYMBOL_@",
         }
     }
 
@@ -1121,11 +1137,8 @@ impl Ord for Symbol {
                 // Do we get an ordering from the strings? ("primarily" and "secondarily")
 
                 // Use with_symbol to avoid a clone in the common cases of special symbols and epsilon symbols
-                let result = self.with_symbol(|self_sym| {
-                    other.with_symbol(|other_sym| {
-                        (other_sym.chars().count(), &self_sym)
-                            .cmp(&(self_sym.chars().count(), &other_sym))
-                    })
+                let result = Symbol::with_symbols([self, other], |[self_sym, other_sym]| {
+                        (other_sym.chars().count(), &self_sym).cmp(&(self_sym.chars().count(), &other_sym))
                 });
                 if result != Ordering::Equal {
                     result
@@ -1329,20 +1342,69 @@ impl Symbol {
         }
     }
 
-    /// Perform an operation on the &str representation of this symbol
+    /// Perform an operation on the &str representation of the given symbols
     /// In some cases (StringSymbol and SpecialSymbol), this avoids a clone
-    pub fn with_symbol<F, X>(&self, f: F) -> X
+    /// Notably, the string symbol and flag_diacritic_symbol cases touch upon a lock
+    /// There is therefore special logic to try to relieve lock pressure
+    pub fn with_symbols<F, X, const N: usize>(syms: [&Self; N], f: F) -> X
     where
-        F: FnOnce(&str) -> X,
+        F: FnOnce(&[&str; N]) -> X,
     {
-        match self {
-            Symbol::Special(special_symbol) => special_symbol.with_symbol(f),
-            Symbol::Flag(flag_diacritic_symbol) => f(&flag_diacritic_symbol.get_symbol()),
-            Symbol::String(string_symbol) => string_symbol.with_symbol(f),
-            #[cfg(feature = "python")]
-            Symbol::External(py_object_symbol) => f(&py_object_symbol.get_symbol()),
-            Symbol::Raw(raw_symbol) => f(&raw_symbol.get_symbol()),
+        // Lock guard initialization: only initialize if we are actually going to use it
+        let lock_guard = if syms.iter().any(|sym| matches!(sym, Symbol::String(_))) {
+            Some(STRING_INTERNER.read().unwrap())
+        } else {
+            None
+        };
+        let mut owned_syms = [const { None }; N]; // In some cases we need to own the symbols
+        let mut deinterned_syms: [&str; N] = [""; N]; // We need to present pointers anyway
+        for (i, sym) in syms.iter().enumerate() {
+            match sym {
+                Symbol::Special(special_symbol) => {
+                    // SpecialSymbol::with_symbol calls with static, the identity closure is compiled away
+                    deinterned_syms[i] = special_symbol.get_symbol_ptr();
+                },
+                Symbol::Flag(flag_diacritic_symbol) => {
+                    // We need to call format anyway, so we must store this symbol somewhere (unavoidable allocation)
+                    // In practice this is constructed inside the option and because string is a pointer type, it takes no extra space
+                    // One hopes the compiler can see that the unwrap is safe. One lives a happier life not knowing.
+                    owned_syms[i] = Some(flag_diacritic_symbol.get_symbol());
+
+                },
+                Symbol::String(string_symbol) => {
+                    // We have a string owned by the interner
+                    // The lock has been initialized if we ever get into this branch
+                    if let Some(guard) = lock_guard.as_ref() {
+                        deinterned_syms[i] = guard.get_index(string_symbol.string.try_into().unwrap()).unwrap()
+                    };
+                    //.unwrap().get_index(string_symbol.string.try_into().unwrap()).unwrap();
+                },
+                Symbol::Raw(raw_symbol) => {
+                    // We need to call format anyway, so we must store this symbol somewhere (unavoidable allocation)
+                    // In practice this is constructed inside the option and because string is a pointer type, it takes no extra space
+                    // One hopes the compiler can see that the unwrap is safe. One lives a happier life not knowing.
+                    owned_syms[i] = Some(raw_symbol.get_symbol());
+                },
+                #[cfg(feature = "python")]
+                Symbol::External(py_object_symbol) => {
+                    // We need to call format anyway, so we must store this symbol somewhere (unavoidable allocation)
+                    // In practice this is constructed inside the option and because string is a pointer type, it takes no extra space
+                    // One hopes the compiler can see that the unwrap is safe. One lives a happier life not knowing.
+                    owned_syms[i] = Some(py_object_symbol.get_symbol());
+                }
+
+            }
         }
+
+        // Borrow hygiene: can't create the borrows as we go
+
+        for i in 0..N {
+            match owned_syms[i].as_ref() {
+                Some(sym) => deinterned_syms[i] = sym,
+                None => (),
+            }
+        }
+        f(&deinterned_syms)
     }
 }
 
@@ -2765,7 +2827,7 @@ impl FST {
             .symbols
             .iter()
             .find(|x| matches!(x, Symbol::String(_) | Symbol::Special(_) | Symbol::Flag(_)))
-            .map(|x| x.with_symbol(|s| s.len()))
+            .map(|x| Symbol::with_symbols([x], |[s]| s.len()))
             .unwrap_or(0);
         let mut slice = text;
         while !slice.is_empty() {
@@ -2776,13 +2838,13 @@ impl FST {
                 }
                 let key = &slice[..length];
                 let pp = self.symbols.partition_point(|x| {
-                    x.with_symbol(|y| (key.chars().count(), y) < (y.chars().count(), key))
+                    Symbol::with_symbols([x],|[y]| (key.chars().count(), y) < (y.chars().count(), &key))
                 });
                 if let Some(sym) = self.symbols[pp..]
                     .iter()
                     .find(|x| matches!(x, Symbol::String(_) | Symbol::Special(_) | Symbol::Flag(_)))
                 {
-                    if sym.with_symbol(|s| s == key) {
+                    if Symbol::with_symbols([sym], |[s]| s == &key) {
                         result.push(sym.clone());
                         slice = &slice[length..];
                         found = true;
