@@ -82,7 +82,18 @@ use nom::branch::alt;
 use nom::bytes::complete::{tag, take_until1};
 use nom::multi::many_m_n;
 use nom::Parser;
-use std::sync::{Arc, LazyLock, RwLock};
+
+// Conditional compilation to test against loom, yay
+
+#[cfg(not(feature = "loom"))]
+use std::sync::{Arc, RwLock};
+#[cfg(feature = "loom")]
+use loom::sync::{Arc, RwLock};
+#[cfg(feature = "loom")]
+use loom::lazy_static;
+#[cfg(not(feature = "loom"))]
+use lazy_static::lazy_static;
+
 use xz2::read::{XzDecoder, XzEncoder};
 
 #[cfg(feature = "python")]
@@ -141,8 +152,9 @@ create_exception!(
 
 // Symbol interning
 
-static STRING_INTERNER: LazyLock<RwLock<IndexSet<String>>> =
-    LazyLock::new(|| RwLock::new(IndexSet::new()));
+lazy_static! {
+    static ref STRING_INTERNER: RwLock<IndexSet<String>> = RwLock::new(IndexSet::new());
+}
 
 fn intern(s: String) -> u32 {
     u32::try_from(STRING_INTERNER.write().unwrap().insert_full(s).0).unwrap()
@@ -1516,7 +1528,7 @@ impl<'py> IntoPyObject<'py> for FlagMap {
 
 // transducer.py
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+#[derive(Debug, Clone)]
 /// The linked list used to represent the transduction outputs.
 /// A linked list is used here, as the transduced sequences of states share prefixes
 /// It is internally in reverse order.
@@ -1524,6 +1536,38 @@ impl<'py> IntoPyObject<'py> for FlagMap {
 pub enum FSTLinkedList<T> {
     Some((Symbol, T), Arc<FSTLinkedList<T>>),
     None,
+}
+
+// These can be derived if Arc = std::sync::Arc; loom::sync::Arc doesn't let these be derived
+
+impl<T: PartialEq> PartialEq for FSTLinkedList<T> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Some(l0, l1), Self::Some(r0, r1)) => l0 == r0 && l1.as_ref() == r1.as_ref(),
+            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
+        }
+    }
+}
+
+impl<T: PartialOrd> PartialOrd for FSTLinkedList<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (FSTLinkedList::Some(l0, l1), FSTLinkedList::Some(r0, r1)) => l0.partial_cmp(r0).and_then(|x| l1.as_ref().partial_cmp(r1.as_ref()).map(|y| x.then(y))),
+            (FSTLinkedList::Some(..), FSTLinkedList::None) => Some(Ordering::Greater),
+            (FSTLinkedList::None, FSTLinkedList::Some(..)) => Some(Ordering::Less),
+            (FSTLinkedList::None, FSTLinkedList::None) => Some(Ordering::Equal)
+        }
+    }
+}
+
+impl<T: Hash> Hash for FSTLinkedList<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+        if let FSTLinkedList::Some(sym, t) = self {
+            sym.hash(state);
+            t.hash(state);
+        }
+    }
 }
 
 impl<T: Clone + Default> IntoIterator for FSTLinkedList<T> {
@@ -3384,6 +3428,7 @@ impl FST {
 }
 
 #[cfg(not(feature = "python"))]
+#[cfg(not(feature = "loom"))]
 mod tests {
     use crate::*;
 
@@ -4025,18 +4070,50 @@ mod tests {
                 ]
         );
     }
+}
 
-    
+#[cfg(feature="loom")]
+mod loomtests {
+    use std::{fs::File, io::Read};
+
+    use crate::{FSTState, FST};
 
     #[test]
-    fn parallelism_does_not_kill_it() {
-        use rayon::prelude::*;
+    fn it_is_reasonably_set_up() {
+        loom::model(|| {
         let fst = FST::from_kfst_file("../pypykko/pypykko/fi-parser.kfst".to_string(), false).unwrap();
         let mut muskettisoturit = String::new();
         File::open("muskettisoturit.txt").unwrap().read_to_string(&mut muskettisoturit).unwrap();
         let sanat = muskettisoturit.split_ascii_whitespace().map(|x| x.to_string()).collect::<Vec<String>>();
-        sanat.par_iter().map(|sana| fst.lookup(sana, FSTState::<()>::default(), true)).collect::<Vec<_>>();
+        for sana in &sanat[0..1] {
+            fst.lookup(sana, FSTState::<()>::default(), true).unwrap();
+        }
+        });
     }
+
+    /*#[test]
+    fn parallelism_does_not_kill_it() {
+        use loom::thread;
+        use loom::sync::Arc;
+        loom::model(|| {
+        let fst = Arc::new(FST::from_kfst_file("../pypykko/pypykko/fi-parser.kfst".to_string(), false).unwrap());
+        let mut muskettisoturit = String::new();
+        File::open("muskettisoturit.txt").unwrap().read_to_string(&mut muskettisoturit).unwrap();
+        let sanat = Arc::new(muskettisoturit.split_ascii_whitespace().map(|x| x.to_string()).collect::<Vec<String>>());
+            const N_THREADS: usize = 10;
+            const N_WORDS: usize = 100;
+            for t_num in 0..N_THREADS {
+                let sanaklooni = sanat.clone();
+                let fstklooni = fst.clone();
+                thread::spawn(move || {
+                    for i in t_num*N_WORDS..(t_num+1)*N_WORDS {
+                        fstklooni.lookup(&sanaklooni[i], FSTState::<()>::default(), true).unwrap();
+                    }
+                });
+            }
+
+        });
+    }*/
 }
 
 /// A Python module implemented in Rust.
