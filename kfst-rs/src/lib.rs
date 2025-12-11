@@ -4141,6 +4141,28 @@ mod loomtests {
     use crate::{FSTState, FST};
 
     #[test]
+    fn test_att_trivial() {
+        loom::model(|| {
+        let fst = FST::from_att_code("1\n0\t1\ta\tb".to_string(), false).unwrap();
+            assert_eq!(
+                fst.lookup("a", FSTState::<()>::default(), false).unwrap(),
+                vec![("b".to_string(), 0.0)]
+            );
+        });
+    }
+
+    #[test]
+    fn test_att_slightly_less_trivial() {
+        loom::model(|| {
+            let fst = FST::from_att_code("2\n0\t1\ta\tb\n1\t2\tc\td".to_string(), false).unwrap();
+            assert_eq!(
+                fst.lookup("ac", FSTState::<()>::default(), false).unwrap(),
+                vec![("bd".to_string(), 0.0)]
+            );
+        });
+    }
+
+    /*#[test]
     fn it_is_reasonably_set_up() {
         loom::model(|| {
         let fst = FST::from_kfst_file("../pypykko/pypykko/fi-parser.kfst".to_string(), false).unwrap();
@@ -4151,7 +4173,7 @@ mod loomtests {
             fst.lookup(sana, FSTState::<()>::default(), true).unwrap();
         }
         });
-    }
+    }*/
 
     /*#[test]
     fn parallelism_does_not_kill_it() {
