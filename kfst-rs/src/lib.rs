@@ -366,10 +366,12 @@ impl Clone for PyObjectSymbol {
 }
 
 #[cfg(feature = "python")]
-impl FromPyObject<'_> for PyObjectSymbol {
-    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
+impl<'py> FromPyObject<'_, 'py> for PyObjectSymbol {
+    type Error = PyErr;
+
+    fn extract(ob: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
         Ok(PyObjectSymbol {
-            value: ob.clone().unbind(),
+            value: <pyo3::Bound<'_, pyo3::PyAny> as Clone>::clone(&ob).unbind(),
         }) // The clone here is technical; no actual cloning of a value
     }
 }
@@ -1383,8 +1385,9 @@ impl Symbol {
 }
 
 #[cfg(feature = "python")]
-impl FromPyObject<'_> for Symbol {
-    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
+impl<'py> FromPyObject<'_, 'py> for Symbol {
+    type Error = PyErr;
+    fn extract(ob: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
         ob.extract()
             .map(Symbol::Special)
             .or_else(|_| ob.extract().map(Symbol::Flag))
@@ -1477,8 +1480,9 @@ impl Default for FlagMap {
 }
 
 #[cfg(feature = "python")]
-impl FromPyObject<'_> for FlagMap {
-    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
+impl<'py> FromPyObject<'_, 'py> for FlagMap {
+    type Error = PyErr;
+    fn extract(ob: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
         let mut as_map: Vec<(u32, bool, u32)> = ob
             .getattr("items")?
             .call0()?
@@ -1698,8 +1702,9 @@ impl FSTState {
 }
 
 #[cfg(feature = "python")]
-impl<T: UsizeOrUnit + Default> FromPyObject<'_> for InternalFSTState<T> {
-    fn extract_bound(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
+impl<'py, T: UsizeOrUnit + Default> FromPyObject<'_, 'py> for InternalFSTState<T> {
+    type Error = PyErr;
+    fn extract(ob: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
         let wrapped: FSTState = ob.extract()?;
         match wrapped.payload {
             Ok(p) => Ok(p.convert_indices()),
