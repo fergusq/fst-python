@@ -2793,7 +2793,7 @@ impl FST {
             if (!found) && allow_unknown {
                 let char = slice.chars().next().unwrap();
                 slice = &slice[char.len_utf8()..];
-                result.push(Symbol::String(StringSymbol::new(char.to_string(), false)));
+                result.push(Symbol::String(StringSymbol::new(char.to_string(), true)));
                 found = true;
             }
             if !found {
@@ -3831,7 +3831,10 @@ mod tests {
 
     #[test]
     fn test_simple_identity() {
-        let code = "0\t1\t@_IDENTITY_SYMBOL_@\t@_IDENTITY_SYMBOL_@\n1";
+
+        // Transducer with disconnected states 2 and 3 for the sake of introducing the known symbol a
+
+        let code = "0\t1\t@_IDENTITY_SYMBOL_@\t@_IDENTITY_SYMBOL_@\n2\t3\ta\ta\n1";
         let fst = FST::from_att_code(code.to_string(), false).unwrap();
 
         assert_eq!(
@@ -3868,6 +3871,11 @@ mod tests {
                 }
             )]
         );
+
+        // Test concretely that the known symbol is treated as a known symbol and the unknown as unknown
+
+        assert_eq!(fst.lookup::<()>("x", FSTState::default(), true).unwrap(), vec![("x".to_string(), 0.0)]);
+        assert_eq!(fst.lookup::<()>("a", FSTState::default(), true).unwrap(), vec![]);
     }
 
     #[test]
