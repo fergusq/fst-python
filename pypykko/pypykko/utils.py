@@ -1,7 +1,6 @@
 import re
 from .constants import PARSER_FST_PATH, FIELD_STRING
 import kfst
-from .scriptutils import validate_pos
 from typing import NamedTuple
 
 C = "[bcdfghjklmnpqrstvwxzšžčśźćń'’]"
@@ -76,6 +75,8 @@ def compare_with_others(a_source, analyses):
 			a_target[5] += f' ← {pos}:{lemma_source}:{participle_tag}'
 			return 'has-participle'
 
+	return
+
 class PykkoAnalysis(NamedTuple):
 	wordform: str
 	source: str
@@ -86,7 +87,7 @@ class PykkoAnalysis(NamedTuple):
 	morphtags: str
 	weight: float
 
-def analyze(word: str, only_best=True, normalize_separators=True, ignore_derivatives=True) -> list[PykkoAnalysis]:
+def analyze(word, only_best=True, normalize_separators=True, ignore_derivatives=True) -> list[PykkoAnalysis]:
 
 	"""
 	Return list of tuples (morphological analyses) with duplicates removed.
@@ -95,7 +96,7 @@ def analyze(word: str, only_best=True, normalize_separators=True, ignore_derivat
 
 	analyses = []
 	taken = {}
-	for analysis_string, weight in list(PARSER_FST.lookup(word)) or [(unk_result(word), inf)]:
+	for analysis_string, weight in PARSER_FST.lookup(word):
 
 		if normalize_separators:
 			analysis_string = analysis_string.replace('⁅BOUNDARY⁆', '|').replace('⁅HYPHEN⁆', '-')
@@ -124,14 +125,16 @@ def analyze(word: str, only_best=True, normalize_separators=True, ignore_derivat
 		filtered.append(analysis)
 		best = weight
 
+	filtered = filtered or [([word] + unk_result(word).split('\t') + [inf])]
+
 	return [PykkoAnalysis(*a) for a in filtered]
 
 
-def add_compound_separators(word: str, pos=None, normalize_separators=True, pick_first=False) -> set[str] | str:
+def add_compound_separators(word, pos=None, normalize_separators=True, pick_first=False):
 
 	# TODO: Allow adding separators to non-lemma words?
 
-	valid: set[str] = set()
+	valid = set()
 	best = inf
 	for a in analyze(word, only_best=False, normalize_separators=normalize_separators):
 		_, _, lemma, p, _, _, _, weight = a
@@ -155,8 +158,10 @@ def is_plural(word):
 			return lemma
 	return False
 
+
 def singularize(word):
 	return is_plural(word) or word
+
 
 def pos_tag(word, force_match=False, max_weight=inf):
 
@@ -189,15 +194,7 @@ def lemmatize(word, pos=None):
 
 def syllabify(word: str, pos=None, compound=True, big_words=False):
 
-	validate_pos(pos)
-
-	# Type checker doesn't particularly enjoy add_compound_separators having a return type
-	# that depends on whether pick_first is True or not.
-
-	if compound:
-		separated = add_compound_separators(word, pos, pick_first=True)
-		assert isinstance(separated, str)
-		word = separated
+	word = add_compound_separators(word, pos, pick_first=True) if compound else word # type: ignore
 
 	# lito·grafia, mikro·skooppi (alternative syllabification)
 	if big_words:

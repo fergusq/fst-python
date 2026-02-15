@@ -1,0 +1,7 @@
++poss1sg
++poss2sg
++poss3
++poss1pl
++poss2pl
++comparative
++superlative
