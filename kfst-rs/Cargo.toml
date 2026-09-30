@@ -18,10 +18,9 @@ crate-type = ["cdylib", "lib"]
 [dependencies]
 indexmap = "2.9.0"
 nom = "8.0.0"
+oxiarc-lzma = "0.4.2"
 pyo3 = { version = "0.27.2", features = ["indexmap", "abi3-py311", "generate-import-lib"], optional = true}
 readonly = "0.2.13"
-xz2 = "0.1.7"
-lzma-sys = {version = "0.1.20", features = ["static"]}
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

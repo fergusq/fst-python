@@ -82,8 +82,8 @@ use nom::branch::alt;
 use nom::bytes::complete::{tag, take_until1};
 use nom::multi::many_m_n;
 use nom::Parser;
+use oxiarc_lzma::xz;
 use std::sync::{Arc, LazyLock, RwLock};
-use xz2::read::{XzDecoder, XzEncoder};
 
 #[cfg(feature = "python")]
 use pyo3::create_exception;
@@ -2023,6 +2023,582 @@ impl UsizeOrUnit for () {
     }
 }
 
+struct EmbeddedFST<'a> {
+    /// A mapping from the index of a final state to its weight.
+    pub _final_states: &'a [(u64, f64)],
+    /// The transition rules of this FST: (state number -> (top symbol -> list of target state indices, bottom symbols and weights))
+    pub _rules: &'a [(u64, &'a [(&'a str, &'a [(u64, &'a str, f64)])])],
+    /// List of all the symbols in the transducer (useful for tokenization). Sorted in reverse order by length.
+    pub _symbols: &'a [&'a str],
+}
+
+trait HasRunFst {
+    fn _run_fst<T: Clone + UsizeOrUnit>(
+        &self,
+        input_symbols: &[Symbol],
+        state: &InternalFSTState<T>,
+        post_input_advance: bool,
+        result: &mut Vec<(bool, bool, InternalFSTState<T>)>,
+        input_symbol_index: usize,
+        keep_non_final: bool,
+    );
+    fn __run_fst<T: UsizeOrUnit + Clone>(
+        &self,
+        input_symbols: Vec<Symbol>,
+        state: InternalFSTState<T>,
+        post_input_advance: bool,
+        input_symbol_index: usize,
+        keep_non_final: bool,
+    ) -> Vec<(bool, bool, InternalFSTState<T>)> {
+        let mut result = vec![];
+        self._run_fst(
+            input_symbols.as_slice(),
+            &state,
+            post_input_advance,
+            &mut result,
+            input_symbol_index,
+            keep_non_final,
+        );
+        result
+    }
+    fn _transition<T: Clone + UsizeOrUnit>(
+        &self,
+        input_symbols: &[Symbol],
+        input_symbol_index: usize,
+        state: &InternalFSTState<T>,
+        transitions: &[(u64, Symbol, f64)],
+        isymbol: Option<&Symbol>,
+        transition_isymbol: &Symbol,
+        result: &mut Vec<(bool, bool, InternalFSTState<T>)>,
+        keep_non_final: bool,
+    ) {
+        for (next_state, osymbol, weight) in transitions.iter() {
+            let new_output_flags = _update_flags(osymbol, &state.output_flags);
+            let new_input_flags = _update_flags(transition_isymbol, &state.input_flags);
+
+            match (new_output_flags, new_input_flags) {
+                (Some(new_output_flags), Some(new_input_flags)) => {
+                    let new_osymbol = match (isymbol, osymbol) {
+                        (Some(isymbol), Symbol::Special(SpecialSymbol::IDENTITY)) => isymbol,
+                        _ => osymbol,
+                    };
+
+                    // Long and complicated maneuver to make a decision of what to do at compile time.
+                    // If we want unit output anyway, we should just compile this condition away
+
+                    let new_symbol_mapping: FSTLinkedList<T> = if new_osymbol.is_epsilon() {
+                        state.symbol_mappings.clone() // Easy case: nothing new to declare anyway
+                    } else {
+                        FSTLinkedList::Some(
+                            (new_osymbol.clone(), T::convert(input_symbol_index)),
+                            Arc::new(state.symbol_mappings.clone()),
+                        )
+                    };
+                    let new_state = InternalFSTState {
+                        state_num: *next_state,
+                        path_weight: state.path_weight + *weight,
+                        input_flags: new_input_flags,
+                        output_flags: new_output_flags,
+                        symbol_mappings: new_symbol_mapping,
+                    };
+                    if transition_isymbol.is_epsilon() {
+                        self._run_fst(
+                            input_symbols,
+                            &new_state,
+                            input_symbols.is_empty(),
+                            result,
+                            input_symbol_index,
+                            keep_non_final,
+                        );
+                    } else {
+                        self._run_fst(
+                            input_symbols,
+                            &new_state,
+                            false,
+                            result,
+                            input_symbol_index + 1,
+                            keep_non_final,
+                        );
+                    }
+                }
+                _ => continue,
+            }
+        }
+    }
+    fn _split_to_symbols(&self, text: &str, allow_unknown: bool) -> Option<Vec<Symbol>>;
+    /// Tokenize a text into Symbol instances matching this transducers alphabet ([FST::symbols]).
+    /// The argument `allow_unknown` matters only if the text can not be cleanly tokenized:
+    /// * If it is set to `true`, untokenizable sequences get represented as [Symbol::String] that are marked as unknown (see eg. [Symbol::is_unknown]).
+    /// * If it is set to `false`, a value of [None] is returned.
+    #[cfg(not(feature = "python"))]
+    fn split_to_symbols(&self, text: &str, allow_unknown: bool) -> Option<Vec<Symbol>> {
+        self._split_to_symbols(text, allow_unknown)
+    }
+
+    #[cfg(not(feature = "python"))]
+    /// Apply this FST to a sequence of symbols `input_symbols` starting from the state `state`.
+    /// The members of the elements of the returned tuple are:
+    ///   * finality of the state
+    ///   * the value of `post_input_advance`
+    ///   * the state proper from which an output symbol sequence can be deduced.
+    ///
+    /// Unless you use special token types or need to do complex token manipulation, you should probably be using [FST::lookup].
+    fn run_fst<T: Clone + UsizeOrUnit>(
+        &self,
+        input_symbols: Vec<Symbol>,
+        state: InternalFSTState<T>,
+        post_input_advance: bool,
+        input_symbol_index: Option<usize>,
+        keep_non_final: bool,
+    ) -> Vec<(bool, bool, InternalFSTState<T>)> {
+        self.__run_fst(
+            input_symbols,
+            state,
+            post_input_advance,
+            input_symbol_index.unwrap_or(0),
+            keep_non_final,
+        )
+    }
+
+    fn _lookup<T: UsizeOrUnit + Clone + Default + Debug>(
+        &self,
+        input: &str,
+        state: InternalFSTState<T>,
+        allow_unknown: bool,
+    ) -> KFSTResult<Vec<(String, f64)>> {
+        let input_symbols = self.split_to_symbols(input, allow_unknown);
+        match input_symbols {
+            None => tokenization_exception(format!("Input cannot be split into symbols: {input}")),
+            Some(input_symbols) => {
+                let mut dedup: IndexSet<String> = IndexSet::new();
+                let mut result: Vec<(String, f64)> = vec![];
+                let mut finished_paths: Vec<(bool, bool, InternalFSTState<()>)> = self.__run_fst(
+                    input_symbols.clone(),
+                    state.convert_indices(),
+                    false,
+                    0,
+                    false,
+                );
+                finished_paths
+                    .sort_by(|a, b| a.2.path_weight.partial_cmp(&b.2.path_weight).unwrap());
+                for finished in finished_paths {
+                    let output_string: String = finished
+                        .2
+                        .symbol_mappings
+                        .to_vec()
+                        .iter()
+                        .map(|x| x.0.get_symbol())
+                        .collect::<Vec<String>>()
+                        .join("");
+                    if dedup.contains(&output_string) {
+                        continue;
+                    }
+                    dedup.insert(output_string.clone());
+                    result.push((output_string, finished.2.path_weight));
+                }
+                Ok(result)
+            }
+        }
+    }
+
+    fn _lookup_aligned<T: UsizeOrUnit + Clone + Default + Debug>(
+        &self,
+        input: &str,
+        state: InternalFSTState<T>,
+        allow_unknown: bool,
+    ) -> KFSTResult<Vec<(Vec<(usize, Symbol)>, f64)>> {
+        let input_symbols = self.split_to_symbols(input, allow_unknown);
+        match input_symbols {
+            None => tokenization_exception(format!("Input cannot be split into symbols: {input}")),
+            Some(input_symbols) => {
+                let mut dedup: IndexSet<Vec<(usize, Symbol)>> = IndexSet::new();
+                let mut result: Vec<(Vec<(usize, Symbol)>, f64)> = vec![];
+                let mut finished_paths: Vec<_> = self
+                    .__run_fst(
+                        input_symbols.clone(),
+                        state.convert_indices(),
+                        false,
+                        0,
+                        false,
+                    )
+                    .into_iter()
+                    .filter(|(finished, _, _)| *finished)
+                    .collect();
+                finished_paths
+                    .sort_by(|a, b| a.2.path_weight.partial_cmp(&b.2.path_weight).unwrap());
+                for finished in finished_paths {
+                    let output_vec: Vec<(usize, Symbol)> = finished
+                        .2
+                        .symbol_mappings
+                        .to_vec()
+                        .into_iter()
+                        .map(|(a, b)| (b, a))
+                        .collect();
+                    if dedup.contains(&output_vec) {
+                        continue;
+                    }
+                    dedup.insert(output_vec.clone());
+                    result.push((output_vec, finished.2.path_weight));
+                }
+                Ok(result)
+            }
+        }
+    }
+
+    #[cfg(not(feature = "python"))]
+    /// Tokenize and transduce `input`, starting from the given `state` (note that [FSTState] implements [Default]) and either allowing or disallowing unknown tokens.
+    /// (See [FST::split_to_symbols] for tokenization of unknown tokens.)
+    ///
+    /// If tokenization succeeds, returns a [Vec] of pairs of transduced strings and their weights.
+    /// If tokenization fails, returns a [KFSTResult::Err] variant
+    ///
+    /// If you need to know what symbol was transduced to what, look at [FST::lookup_aligned]. If you need more control over tokenization (or if your symbols just can not be parsed from a string representation), [FST::run_fst] might be what you are looking for.
+    fn lookup<T: UsizeOrUnit + Clone + Default + Debug>(
+        &self,
+        input: &str,
+        state: InternalFSTState<T>,
+        allow_unknown: bool,
+    ) -> KFSTResult<Vec<(String, f64)>> {
+        self._lookup(input, state, allow_unknown)
+    }
+
+    #[cfg(not(feature = "python"))]
+    /// Tokenize and transduce `input`, starting from the given `state` (note that [FSTState] implements [Default]) and either allowing or disallowing unknown tokens.
+    /// (See [FST::split_to_symbols] for tokenization of unknown tokens.)
+    ///
+    /// If tokenization succeeds, returns a [Vec] of pairs. On the left is a [Vec] of pairs of indices into the input symbol list and matching output symbols. On the right is the weight of this path.
+    /// If tokenization fails, returns a [KFSTResult::Err] variant
+    ///
+    /// If you just want strings in and strings out, look at [FST::lookup]. If you need more control over tokenization (or if your symbols just can not be parsed from a string representation), [FST::run_fst] might be what you are looking for.
+    ///
+    /// This method swallows output epsilons. Concretely, if an input character is transduced to an epsilon, that input character is seen as being part of the transduction of whatever the next non-epsilon output character is. (See example for more details)
+    /// ```rust
+    /// use kfst_rs::{FST, FSTState, Symbol, StringSymbol, SpecialSymbol};
+    ///
+    /// // We load the pykko parser to parse an actual finnish word
+    ///
+    /// let fst = FST::from_kfst_file("../pypykko/pypykko/fi-parser.kfst".to_string(), false).unwrap();
+    ///
+    /// // We parse "isonvarpaan" which is the genitive form of "isovarvas".
+    /// // It is the compound of "iso" and "varvas" and notably it inflects in both components:
+    /// // (iso -> ison and varvas -> varpaan)
+    /// // We wish to recover the information regarding what ranges in the original word the compound components match.
+    /// // Thus we need lookup_aligned.
+    ///
+    /// assert_eq!(
+    ///   fst.lookup_aligned("isonvarpaan", FSTState::<usize>::default(), false).unwrap()[0].0, // Discard secondary interpretations and weight
+    ///   vec![
+    ///        // The first item of the tuple is the index in the source string;
+    ///        // If it doesn't increment for a row, the output symbol came from an epsilon transition
+    ///        (0, Symbol::String(StringSymbol::new("Lexicon".to_string(), false))),
+    ///        (0, Symbol::String(StringSymbol::new("\t".to_string(), false))),
+    ///
+    ///        // Here we have a run of incrementing indices: i:i, s:s, o:o and n:@_EPSILON_SYMBOL_@. The last gets swallowed.
+    ///
+    ///        (0, Symbol::String(StringSymbol::new("i".to_string(), false))),
+    ///        (1, Symbol::String(StringSymbol::new("s".to_string(), false))),
+    ///        (2, Symbol::String(StringSymbol::new("o".to_string(), false))),
+    ///
+    ///        // Here we have a row that isn't incremented after, ie. the separating pipe comes from
+    ///        // @_EPSILON_SYMBOL_@:|
+    ///
+    ///        (4, Symbol::String(StringSymbol::new("|".to_string(), false))),
+    ///
+    ///        // Here on we increment v:v, a:a, r:r, p:v, a:a
+    ///
+    ///        (4, Symbol::String(StringSymbol::new("v".to_string(), false))),
+    ///        (5, Symbol::String(StringSymbol::new("a".to_string(), false))),
+    ///        (6, Symbol::String(StringSymbol::new("r".to_string(), false))),
+    ///        (7, Symbol::String(StringSymbol::new("v".to_string(), false))),
+    ///        (8, Symbol::String(StringSymbol::new("a".to_string(), false))),
+    ///
+    ///        // These two are somewhat surprising: @_EPSILON_SYMBOL_@:s and  a:@_EPSILON_SYMBOL_@.
+    ///        // Notably there is consonant gradation going on (varva -> varpa)
+    ///        // As the output epsilon gets swallowed, this gets interpreted as a:s.
+    ///
+    ///        (9, Symbol::String(StringSymbol::new("s".to_string(), false))),
+    ///
+    ///        // We are out of the stem and in the genitive ending (-n)
+    ///        // The final n is consumed by the +gen token
+    ///
+    ///        (10, Symbol::String(StringSymbol::new("\tnoun\t".to_string(), false))),
+    ///        (10, Symbol::String(StringSymbol::new("\t".to_string(), false))),
+    ///        (10, Symbol::String(StringSymbol::new("\t".to_string(), false))),
+    ///        (10, Symbol::String(StringSymbol::new("+sg".to_string(), false))),
+    ///        (10, Symbol::String(StringSymbol::new("+gen".to_string(), false)))]
+    /// );
+    /// ```
+    fn lookup_aligned<T: UsizeOrUnit + Clone + Default + Debug>(
+        &self,
+        input: &str,
+        state: InternalFSTState<T>,
+        allow_unknown: bool,
+    ) -> KFSTResult<Vec<(Vec<(usize, Symbol)>, f64)>> {
+        self._lookup_aligned(input, state, allow_unknown)
+    }
+    fn _update_flags(symbol: &Symbol, flags: &FlagMap) -> Option<FlagMap> {
+        if let Symbol::Flag(flag_diacritic_symbol) = symbol {
+            match flag_diacritic_symbol.flag_type {
+                FlagDiacriticType::U => {
+                    let value = flag_diacritic_symbol.value;
+
+                    // Is the current state somehow in conflict?
+                    // It can be, if we are negatively set to what we try to unify to or we are positively set to sth else
+
+                    if let Some((currently_set, current_value)) =
+                        flags.get(flag_diacritic_symbol.key)
+                    {
+                        if (currently_set && current_value != value)
+                            || (!currently_set && current_value == value)
+                        {
+                            return None;
+                        }
+                    }
+
+                    // Otherwise, update flag set
+
+                    Some(flags.insert(flag_diacritic_symbol.key, (true, value)))
+                }
+                FlagDiacriticType::R => {
+                    // Param count matters
+
+                    match flag_diacritic_symbol.value {
+                        u32::MAX => {
+                            if flags.get(flag_diacritic_symbol.key).is_some() {
+                                Some(flags.clone())
+                            } else {
+                                None
+                            }
+                        }
+                        value => {
+                            if flags
+                                .get(flag_diacritic_symbol.key)
+                                .map(|stored| _test_flag(&stored, value))
+                                .unwrap_or(false)
+                            {
+                                Some(flags.clone())
+                            } else {
+                                None
+                            }
+                        }
+                    }
+                }
+                FlagDiacriticType::D => {
+                    match (
+                        flag_diacritic_symbol.value,
+                        flags.get(flag_diacritic_symbol.key),
+                    ) {
+                        (u32::MAX, None) => Some(flags.clone()),
+                        (u32::MAX, _) => None,
+                        (_, None) => Some(flags.clone()),
+                        (query, Some(stored)) => {
+                            if _test_flag(&stored, query) {
+                                None
+                            } else {
+                                Some(flags.clone())
+                            }
+                        }
+                    }
+                }
+                FlagDiacriticType::C => Some(flags.remove(flag_diacritic_symbol.key)),
+                FlagDiacriticType::P => {
+                    let value = flag_diacritic_symbol.value;
+                    Some(flags.insert(flag_diacritic_symbol.key, (true, value)))
+                }
+                FlagDiacriticType::N => {
+                    let value = flag_diacritic_symbol.value;
+                    Some(flags.insert(flag_diacritic_symbol.key, (false, value)))
+                }
+            }
+        } else {
+            Some(flags.clone())
+        }
+    }
+
+    fn _get_input_symbols<T>(&self, state: InternalFSTState<T>) -> HashSet<Symbol>;
+
+    #[cfg(not(feature = "python"))]
+    /// Equal to:
+    /// ```no_test
+    /// self.rules[&state.state_num].keys().cloned().collect()
+    /// ```
+    /// Exists as its own function to make getting the input symbols of a state fast when calling from Python.
+    /// (Otherwise the whole [FST::rules] mapping needs to be converted into Python's representation, which is significantly slower)
+    ///
+    /// ```
+    /// use kfst_rs::{FST, Symbol, FSTState};
+    /// use std::collections::{HashSet, HashMap};
+    ///
+    /// let fst = FST::from_att_code("0\t1\ta\tb\n".to_string(), false).unwrap();
+    /// let mut expected = HashSet::new();
+    /// expected.insert(Symbol::parse("a").unwrap().1);
+    /// assert_eq!(fst.get_input_symbols(FSTState::<()>::new(0, 0.0, HashMap::new(), HashMap::new(), vec![], vec![])), expected);
+    /// assert_eq!(fst.get_input_symbols(FSTState::<()>::new(1, 0.0, HashMap::new(), HashMap::new(), vec![], vec![])), HashSet::new());
+    /// ```
+    fn get_input_symbols<T>(&self, state: FSTState<T>) -> HashSet<Symbol> {
+        self._get_input_symbols(state)
+    }
+}
+
+impl<'a> EmbeddedFST<'a> {
+    fn lookup_transitions(
+        &'a self,
+        state: u64,
+    ) -> Box<dyn Iterator<Item = (&str, (u64, &'a str, f64))> + 'a> {
+        match self._rules.binary_search_by(|x| x.0.cmp(&state)) {
+            Ok(x) => {
+                let state_transitions: &'a [(&'a str, &'a [(u64, &'a str, f64)])] =
+                    self._rules[x].1;
+                let iterator: Box<dyn Iterator<Item = _> + 'a> = Box::new(
+                    state_transitions
+                        .iter()
+                        .flat_map(|y| y.1.iter().map(|z| (y.0, *z))),
+                );
+                iterator
+            }
+            Err(_) => Box::new([].into_iter()),
+        }
+    }
+}
+
+impl<'a> HasRunFst for EmbeddedFST<'a> {
+    fn _run_fst<T: Clone + UsizeOrUnit>(
+        &self,
+        input_symbols: &[Symbol],
+        state: &InternalFSTState<T>,
+        post_input_advance: bool,
+        result: &mut Vec<(bool, bool, InternalFSTState<T>)>,
+        input_symbol_index: usize,
+        keep_non_final: bool,
+    ) {
+        let transitions = self.lookup_transitions(state.state_num);
+        let unknowns_and_identities = self
+            .lookup_transitions(state.state_num)
+            .filter(|x| x.0 == "@_IDENTITY_SYMBOL_@" || x.0 == "@_UNKNOWN_SYMBOL_@");
+        let isymbol = if input_symbols.len() - input_symbol_index == 0 {
+            match self
+                ._final_states
+                .binary_search_by(|x| x.0.cmp(&state.state_num))
+            {
+                Ok(idx) => {
+                    // Update weight of state to account for weight of final state
+                    result.push((
+                        true,
+                        post_input_advance,
+                        InternalFSTState {
+                            state_num: state.state_num,
+                            path_weight: state.path_weight + self._final_states[idx].1,
+                            input_flags: state.input_flags.clone(),
+                            output_flags: state.output_flags.clone(),
+                            symbol_mappings: state.symbol_mappings.clone(),
+                        },
+                    ));
+                }
+                Err(_) => {
+                    // Not a final state
+                    if keep_non_final {
+                        result.push((false, post_input_advance, state.clone()));
+                    }
+                }
+            }
+            None
+        } else {
+            Some(&input_symbols[input_symbol_index])
+        };
+        for transition in transitions {
+            // Safe to unwrap; all should be created at compile time from valid symbols
+
+            let transition_isymbol = Symbol::parse(transition.0).unwrap().1;
+
+            if transition_isymbol.is_epsilon() || isymbol == Some(&transition_isymbol) {
+                self._transition(
+                    input_symbols,
+                    input_symbol_index,
+                    state,
+                    &[(
+                        transition.1 .0,
+                        Symbol::parse(transition.1 .1).unwrap().1,
+                        transition.1 .2,
+                    )],
+                    isymbol,
+                    &transition_isymbol,
+                    result,
+                    keep_non_final,
+                );
+            }
+        }
+        if let Some(isymbol) = isymbol {
+            if isymbol.is_unknown() {
+                self._transition(
+                    input_symbols,
+                    input_symbol_index,
+                    state,
+                    unknowns_and_identities
+                        .map(|x| (x.1 .0, Symbol::parse(x.1 .1).unwrap().1, x.1 .2))
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                    Some(isymbol),
+                    &Symbol::Special(SpecialSymbol::UNKNOWN),
+                    result,
+                    keep_non_final,
+                );
+            }
+        }
+    }
+
+    fn _split_to_symbols(&self, text: &str, allow_unknown: bool) -> Option<Vec<Symbol>> {
+        let mut result: Vec<Symbol> = vec![];
+        let max_byte_len = self
+            ._symbols
+            .iter()
+            .map(|x| Symbol::parse(x).unwrap().1)
+            .find(|x| matches!(x, Symbol::String(_) | Symbol::Special(_) | Symbol::Flag(_)))
+            .map(|x| x.with_symbol(|s| s.len()))
+            .unwrap_or(0);
+        let mut slice = text;
+        while !slice.is_empty() {
+            let mut found = false;
+            for length in (0..std::cmp::min(max_byte_len, slice.len()) + 1).rev() {
+                if !slice.is_char_boundary(length) {
+                    continue;
+                }
+                let key = &slice[..length];
+                let pp = self
+                    ._symbols
+                    .partition_point(|x| (key.chars().count(), x) < (x.chars().count(), &key));
+                if let Some(sym) = self._symbols[pp..].iter().find(|x| {
+                    matches!(
+                        Symbol::parse(x).unwrap().1,
+                        Symbol::String(_) | Symbol::Special(_) | Symbol::Flag(_)
+                    )
+                }) {
+                    if sym == &key {
+                        result.push(Symbol::parse(sym).unwrap().1);
+                        slice = &slice[length..];
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found) && allow_unknown {
+                let char = slice.chars().next().unwrap();
+                slice = &slice[char.len_utf8()..];
+                result.push(Symbol::String(StringSymbol::new(char.to_string(), true)));
+                found = true;
+            }
+            if !found {
+                return None;
+            }
+        }
+        Some(result)
+    }
+    fn _get_input_symbols<T>(&self, state: InternalFSTState<T>) -> HashSet<Symbol> {
+        self.lookup_transitions(state.state_num)
+            .map(|x| Symbol::parse(x.0).unwrap().1)
+            .collect::<HashSet<_>>()
+    }
+}
+
 #[cfg_attr(feature = "python", pyclass(frozen, get_all))]
 #[readonly::make]
 /// A finite state transducer.
@@ -2313,7 +2889,7 @@ impl FST {
             nom::sequence::terminated(nom::bytes::complete::take_until1("\0"), tag("\0")),
             num_symbols.into(),
         );
-        let (rest, symbols) = symbol
+        let (mut rest, symbols) = symbol
             .parse(rest)
             .map_err(|_: nom::Err<()>| "Failed to parse symbol list")?;
         let symbol_strings: Vec<&str> = symbols
@@ -2347,10 +2923,10 @@ impl FST {
         // From here on, data is lzma-compressed
 
         let mut decomp: Vec<u8> = Vec::new();
-        let mut decoder = XzDecoder::new(rest);
-        decoder
-            .read_to_end(&mut decomp)
-            .map_err(|_| "Failed to xz-decompress remainder of file")?;
+        decomp.extend(
+            xz::decompress(&mut rest)
+                .map_err(|x| format!("Failed to xz-decompress remainder of file: {x}"))?,
+        );
 
         // The decompressed data is - unavoidably - owned by the function
         // We promise an error type of &[u8], which we can't provide from here because of lifetimes
@@ -2534,13 +3110,7 @@ impl FST {
 
         // Compress compressible buffer
 
-        let mut compressed = vec![];
-
-        let mut encoder = XzEncoder::new(to_compress.as_slice(), 9);
-        encoder
-            .read_to_end(&mut compressed)
-            .map_err(|x| format!("Failed while compressing with lzma_rs: {x}"))?;
-        result.extend(compressed);
+        result.extend(xz::compress(&to_compress, 9).unwrap());
 
         Ok(result)
     }
@@ -3879,8 +4449,14 @@ mod tests {
 
         // Test concretely that the known symbol is treated as a known symbol and the unknown as unknown
 
-        assert_eq!(fst.lookup::<()>("x", FSTState::default(), true).unwrap(), vec![("x".to_string(), 0.0)]);
-        assert_eq!(fst.lookup::<()>("a", FSTState::default(), true).unwrap(), vec![]);
+        assert_eq!(
+            fst.lookup::<()>("x", FSTState::default(), true).unwrap(),
+            vec![("x".to_string(), 0.0)]
+        );
+        assert_eq!(
+            fst.lookup::<()>("a", FSTState::default(), true).unwrap(),
+            vec![]
+        );
     }
 
     #[test]
