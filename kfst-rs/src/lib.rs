@@ -75,7 +75,7 @@ use std::fmt::Error;
 use std::fs::{self, File};
 use std::hash::Hash;
 use std::io::Read;
-use std::ops::Index;
+use std::ops::{Deref, Index};
 use std::path::Path;
 use std::range;
 
@@ -2025,56 +2025,31 @@ impl UsizeOrUnit for () {
     }
 }
 
-/*
-
-fn sliceify_1<T: AsRef<str>>(x: &(u64, T, f64)) ->  (u64, &str, f64) {
-    (x.0, x.1.as_ref(), x.2)
+pub trait Container {
+    type Wrap<T: ?Sized + AsRef<T> + 'static>: AsRef<T> + 'static;
 }
 
-fn sliceify_2<'a, T: AsRef<str>>(x: &'a Vec<(u64, T, f64)>, store: &'a mut Vec<(u64, &'a str, f64)>) -> &'a [(u64, &'a str, f64)] {
-    for y in x {
-        store.push(sliceify_1(y));
-    }
-    store.as_slice()
+pub struct BoxContainer;
+pub struct RefContainer;
+
+impl Container for BoxContainer {
+    type Wrap<T: ?Sized + AsRef<T> + 'static> = Box<T>;
 }
 
-fn sliceify_3<'a, T: AsRef<str>>(x: Vec<(T, &'a Vec<(u64, T, f64)>)>, store: &'a mut Vec<(&'a str, Vec<(u64, &'a str, f64)>)>) -> &'a [(&'a str, &'a [(u64, &'a str, f64)])] {
-    for _ in x.iter() {
-        store.push(("", vec![]));
-    }
-    for (y, z) in x {
-        let mut w = vec![];
-        sliceify_2(z, &mut w);
-        store.push(("", w.clone()));
-    }
-    &[]
-}*/
+impl Container for RefContainer {
+    type Wrap<T: ?Sized + AsRef<T> + 'static> = &'static T;
+}
 
-/*
-<StringLike: AsRef<str>,
-        T: Index<usize, Output = (u64, f64)>,
-        T2: Index<usize, Output = StringLike>,
-        T3: Index<usize, Output = (u64, StringLike, f64)> + HasIter<'a, (u64, StringLike, f64)>,
-        T4: Index<usize, Output = (StringLike, T3)> + HasIter<'a, (StringLike, T3)>,
-        T5: Index<usize, Output = (u64, T4)> + HasBs<(u64, T4)>
-    >
-*/
-struct EmbeddedFST<
-        StringLike: AsRef<str>,
-        T: Index<usize, Output = (u64, f64)>,
-        T2: Index<usize, Output = StringLike>,
-        T3: Index<usize, Output = (u64, StringLike, f64)> + HasIter<(u64, StringLike, f64)>,
-        T4: Index<usize, Output = (StringLike, T3)> + HasIter<(StringLike, T3)>,
-        T5: Index<usize, Output = (u64, T4)>> {
+pub struct EmbeddedFST<C: Container> {
     /// A mapping from the index of a final state to its weight.
-    pub _final_states: T,
+    pub _final_states: C::Wrap<[(u64, f64)]>,
     /// The transition rules of this FST: (state number -> (top symbol -> list of target state indices, bottom symbols and weights))
-    pub _rules: T5,
+    pub _rules: C::Wrap<[(u64, C::Wrap<[(C::Wrap<str>, C::Wrap<[(u64, C::Wrap<str>, f64)]>)]>)]>,
     /// List of all the symbols in the transducer (useful for tokenization). Sorted in reverse order by length.
-    pub _symbols: T2,
+    pub _symbols: C::Wrap<[C::Wrap<str>]>,
 }
 
-trait HasRunFst {
+pub trait HasRunFst {
     fn _run_fst<T: Clone + UsizeOrUnit>(
         &self,
         input_symbols: &[Symbol],
@@ -2484,7 +2459,7 @@ trait HasRunFst {
 
 // Slightly less wide type of lambda
 
-trait HasBs<T> {
+pub trait HasBs<T> {
     fn bs<F>(&self, f: F) -> Result<usize, usize>
 where
     F: Fn(&T) -> Ordering;
@@ -2523,12 +2498,12 @@ where
     }
 }
 
-trait HasIter<T> {
+pub trait HasIter<T> {
     fn _iter(&'_ self) -> std::slice::Iter<'_, T>;
 }
 
 impl<T> HasIter<T> for &[T] {
-    fn _iter(&self) -> std::slice::Iter<T> {
+    fn _iter(&self) -> std::slice::Iter<'_, T> {
         self.iter()
     }
 }
@@ -2539,7 +2514,7 @@ impl<T> HasIter<T> for Vec<T> {
     }
 }
 
-trait Sliceable<T> {
+pub trait Sliceable<T> {
     fn slice(&self, r: std::ops::RangeFrom<usize>) -> &[T];
 }
 
@@ -2555,25 +2530,19 @@ impl<T> Sliceable<T> for Vec<T> {
     }
 }
 
-impl<StringLike: AsRef<str>,
-        T: Index<usize, Output = (u64, f64)>,
-        T2: Index<usize, Output = StringLike>,
-        T3: Index<usize, Output = (u64, StringLike, f64)> + HasIter<(u64, StringLike, f64)>,
-        T4: Index<usize, Output = (StringLike, T3)> + HasIter<(StringLike, T3)>,
-        T5: Index<usize, Output = (u64, T4)> + HasBs<(u64, T4)>
-    > EmbeddedFST<StringLike, T, T2, T3, T4, T5> {
+impl<C: Container> EmbeddedFST<C> {
     fn lookup_transitions(
         &'_ self,
         state: u64,
     ) -> Box<dyn Iterator<Item = (&'_ str, (u64, &'_ str, f64))> + '_> {
-        match self._rules.bs(|x| x.0.cmp(&state)) {
+        match self._rules.as_ref().binary_search_by(|x| x.0.cmp(&state)) {
             Ok(x) => {
-                let state_transitions: &T4 =
-                    &self._rules[x].1;
+                let state_transitions =
+                    &self._rules.as_ref()[x].1;
                 let iterator: Box<dyn Iterator<Item = _>> = Box::new(
                     state_transitions
-                        ._iter()
-                        .flat_map(|y| y.1._iter().map(|z| (y.0.as_ref(), (z.0, z.1.as_ref(), z.2)))),
+                        .as_ref().iter()
+                        .flat_map(|y| y.1.as_ref().iter().map(|z| (y.0.as_ref(), (z.0, z.1.as_ref(), z.2)))),
                 );
                 iterator
             }
@@ -2592,52 +2561,41 @@ struct EmbeddedFST<
         T5: Index<usize, Output = (u64, T4)>> {
 */
 
-impl EmbeddedFST<
-    String,
-    Vec<(u64, f64)>,
-    Vec<String>,
-    Vec<(u64, String, f64)>,
-    Vec<(String, Vec<(u64, String, f64)>)>,
-    Vec<(u64, Vec<(String, Vec<(u64, String, f64)>)>)>> {
-    fn from_fst(source: FST) -> Self {
+impl EmbeddedFST<BoxContainer> {
+    pub fn from_fst(source: FST) -> Self {
 
         let mut final_states: Vec<(u64, f64)> = source.final_states.into_iter().collect();
         final_states.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
 
         // Owned rules
 
-        let mut rules: Vec<(u64, Vec<(String, Vec<(u64, String, f64)>)>)> = vec![];
+        let mut rules: Vec<(u64, Box<[(Box<str>, Box<[(u64, Box<str>, f64)]>)]>)> = vec![];
         for (source_state, transitions) in source.rules.into_iter() {
             let mut converted_transitions = vec![];
             for (sym, target_transitions) in transitions.into_iter() {
-                let mut converted_target_transitions: Vec<_> = target_transitions.iter().map(|x| (x.0, x.1.get_symbol(), x.2)).collect();
+                let mut converted_target_transitions: Vec<_> = target_transitions.iter().map(|x| (x.0, x.1.get_symbol().into_boxed_str(), x.2)).collect();
                 converted_target_transitions.sort_by(|x, y| x.0.cmp(&y.0).then(x.1.cmp(&y.1)).then(x.2.total_cmp(&y.2)));
-                converted_transitions.push((sym.get_symbol(), converted_target_transitions));
+                converted_transitions.push((sym.get_symbol().into_boxed_str(), converted_target_transitions.into_boxed_slice()));
             }
             converted_transitions.sort_by(|x, y| x.0.cmp(&y.0));
-            rules.push((source_state, converted_transitions));
+            rules.push((source_state, converted_transitions.into_boxed_slice()));
         }
         rules.sort_by(|x, y| x.0.cmp(&y.0));
 
-        let symbols: Vec<String> = source.symbols.into_iter().map(|x| x.get_symbol()).collect();
+        let symbols: Vec<Box<str>> = source.symbols.into_iter().map(|x| x.get_symbol().into_boxed_str()).collect();
         // TODO: should this be sorted in a different way?
 
-        let target = EmbeddedFST {
-            _final_states: final_states,
-            _rules: rules,
-            _symbols: symbols,
+        let target: EmbeddedFST<BoxContainer> = EmbeddedFST {
+            _final_states: final_states.into_boxed_slice(),
+            _symbols: symbols.into_boxed_slice(),
+            _rules: rules.into_boxed_slice(),
         };
 
         target
     }
 }
 
-impl<StringLike: AsRef<str>,
-T: Index<usize, Output = (u64, f64)> + HasBs<(u64, f64)>,
-T2: Index<usize, Output = StringLike> + HasIter<StringLike> + HasBs<StringLike> + Sliceable<StringLike>,
-T3: Index<usize, Output = (u64, StringLike, f64)> + HasIter<(u64, StringLike, f64)>,
-T4: Index<usize, Output = (StringLike, T3)> + HasIter<(StringLike, T3)>,
-T5: Index<usize, Output = (u64, T4)> + HasBs<(u64, T4)>> HasRunFst for EmbeddedFST<StringLike, T, T2, T3, T4, T5> {
+impl<C: Container> HasRunFst for EmbeddedFST<C> {
     fn _run_fst<T6: Clone + UsizeOrUnit>(
         &self,
         input_symbols: &[Symbol],
@@ -2654,7 +2612,7 @@ T5: Index<usize, Output = (u64, T4)> + HasBs<(u64, T4)>> HasRunFst for EmbeddedF
         let isymbol = if input_symbols.len() - input_symbol_index == 0 {
             match self
                 ._final_states
-                .bs(|x| x.0.cmp(&state.state_num))
+                .as_ref().binary_search_by(|x| x.0.cmp(&state.state_num))
             {
                 Ok(idx) => {
                     // Update weight of state to account for weight of final state
@@ -2663,7 +2621,7 @@ T5: Index<usize, Output = (u64, T4)> + HasBs<(u64, T4)>> HasRunFst for EmbeddedF
                         post_input_advance,
                         InternalFSTState {
                             state_num: state.state_num,
-                            path_weight: state.path_weight + self._final_states[idx].1,
+                            path_weight: state.path_weight + self._final_states.as_ref()[idx].1,
                             input_flags: state.input_flags.clone(),
                             output_flags: state.output_flags.clone(),
                             symbol_mappings: state.symbol_mappings.clone(),
@@ -2726,7 +2684,8 @@ T5: Index<usize, Output = (u64, T4)> + HasBs<(u64, T4)>> HasRunFst for EmbeddedF
         let mut result: Vec<Symbol> = vec![];
         let max_byte_len = self
             ._symbols
-            ._iter()
+            .as_ref()
+            .iter()
             .map(|x| Symbol::parse(x.as_ref()).unwrap().1)
             .find(|x| matches!(x, Symbol::String(_) | Symbol::Special(_) | Symbol::Flag(_)))
             .map(|x| x.with_symbol(|s| s.len()))
@@ -2741,8 +2700,8 @@ T5: Index<usize, Output = (u64, T4)> + HasBs<(u64, T4)>> HasRunFst for EmbeddedF
                 let key = &slice[..length];
                 let pp = self
                     ._symbols
-                    .pp(|x| (key.chars().count(), x.as_ref()) < (x.as_ref().chars().count(), &key));
-                if let Some(sym) = self._symbols.slice(pp..).iter().find(|x| {
+                    .as_ref().partition_point(|x| (key.chars().count(), x.as_ref()) < (x.as_ref().chars().count(), &key));
+                if let Some(sym) = self._symbols.as_ref()[pp..].iter().find(|x| {
                     matches!(
                         Symbol::parse(x.as_ref()).unwrap().1,
                         Symbol::String(_) | Symbol::Special(_) | Symbol::Flag(_)
