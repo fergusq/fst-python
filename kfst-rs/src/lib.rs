@@ -2040,11 +2040,20 @@ impl Container for RefContainer {
     type Wrap<T: ?Sized + AsRef<T> + 'static> = &'static T;
 }
 
+// TODO: parameterize the state and weight types
+// Many fsts don't need 64 bits per state and have small integer weights
+// RN hardcode limits that are useful for the current tests
 pub struct EmbeddedFST<C: Container> {
     /// A mapping from the index of a final state to its weight.
-    pub _final_states: C::Wrap<[(u64, f64)]>,
-    /// The transition rules of this FST: (state number -> (top symbol -> list of target state indices, bottom symbols and weights))
-    pub _rules: C::Wrap<[(u64, C::Wrap<[(C::Wrap<str>, C::Wrap<[(u64, C::Wrap<str>, f64)]>)]>)]>,
+    pub _final_states: C::Wrap<[(u32, u8)]>,
+    /// The transition rules of this FST
+    /// Saved in columnar order for better macro generation
+    pub source_states: C::Wrap<[u32]>,
+    pub target_states: C::Wrap<[u32]>,
+    pub top_symbols: C::Wrap<[u16]>,
+    pub bottom_symbols: C::Wrap<[u16]>,
+    pub weights: C::Wrap<[u8]>,
+    pub weightset: C::Wrap<[f64]>,
     /// List of all the symbols in the transducer (useful for tokenization). Sorted in reverse order by length.
     pub _symbols: C::Wrap<[C::Wrap<str>]>,
 }
@@ -2535,19 +2544,13 @@ impl<C: Container> EmbeddedFST<C> {
         &'_ self,
         state: u64,
     ) -> Box<dyn Iterator<Item = (&'_ str, (u64, &'_ str, f64))> + '_> {
-        match self._rules.as_ref().binary_search_by(|x| x.0.cmp(&state)) {
-            Ok(x) => {
-                let state_transitions =
-                    &self._rules.as_ref()[x].1;
-                let iterator: Box<dyn Iterator<Item = _>> = Box::new(
-                    state_transitions
-                        .as_ref().iter()
-                        .flat_map(|y| y.1.as_ref().iter().map(|z| (y.0.as_ref(), (z.0, z.1.as_ref(), z.2)))),
-                );
-                iterator
-            }
-            Err(_) => Box::new([].into_iter()),
-        }
+        let start_bound =  self.source_states.as_ref().partition_point(|x| (*x as u64) < state);
+        let end_bound = self.source_states.as_ref().partition_point(|x| (*x as u64) <= state);
+        Box::new(self.top_symbols.as_ref()[start_bound..end_bound].iter().zip(
+                self.target_states.as_ref()[start_bound..end_bound].iter()).zip(
+                self.bottom_symbols.as_ref()[start_bound..end_bound].iter()).zip(
+                self.weights.as_ref()[start_bound..end_bound].iter()
+                ).map(|x| (self._symbols.as_ref()[*x.0.0.0 as usize].as_ref(), (*x.0.0.1 as u64, self._symbols.as_ref()[*x.0.1 as usize].as_ref(), self.weightset.as_ref()[*x.1 as usize]))))
     }
 }
 
@@ -2564,8 +2567,20 @@ struct EmbeddedFST<
 impl EmbeddedFST<BoxContainer> {
     pub fn from_fst(source: FST) -> Self {
 
-        let mut final_states: Vec<(u64, f64)> = source.final_states.into_iter().collect();
-        final_states.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        let mut weight_lookup: IndexMap<[u8; 8], u8> = IndexMap::new();
+        let mut weight_set = vec![];
+
+        for w in source.final_states.iter() {
+            if !weight_lookup.contains_key(&w.1.to_le_bytes()) {
+                let l = weight_lookup.len();
+                weight_lookup.insert(w.1.to_le_bytes(), l.try_into().unwrap());
+                weight_set.push(*w.1);
+            }
+        }
+
+
+        let mut final_states: Vec<(u32, u8)> = source.final_states.into_iter().map(|(a, b)| (a.try_into().unwrap(), weight_lookup[&b.to_le_bytes()])).collect();
+        final_states.sort_by(|a, b| a.0.cmp(&b.0).then(weight_set[a.1 as usize].total_cmp(&weight_set[b.1 as usize])));
 
         // Owned rules
 
@@ -2583,12 +2598,48 @@ impl EmbeddedFST<BoxContainer> {
         rules.sort_by(|x, y| x.0.cmp(&y.0));
 
         let symbols: Vec<Box<str>> = source.symbols.into_iter().map(|x| x.get_symbol().into_boxed_str()).collect();
-        // TODO: should this be sorted in a different way?
+        // TODO: should this be sorted in a differ
+        
+        let mut symbol_lookup: IndexMap<String, u16> = IndexMap::new();
+
+        for (idx, symbol) in symbols.iter().enumerate() {
+            symbol_lookup.insert(symbol.to_string(), idx.try_into().unwrap());
+        }
+
+        // True pain in the ass
+
+        let mut start_states: Vec<u32> = vec![];
+        let mut target_states: Vec<u32> = vec![];
+        let mut top_symbols: Vec<u16> = vec![];
+        let mut bottom_symbols: Vec<u16> = vec![];
+        let mut weights: Vec<u8> = vec![];
+
+        for (start_state, x) in rules {
+            for (top_symbol, y) in x {
+                for (target_state, bottom_symbol, weight) in y {
+                    start_states.push(start_state.try_into().unwrap());
+                    target_states.push(target_state.try_into().unwrap());
+                    top_symbols.push(symbol_lookup[&top_symbol.to_string()]);
+                    bottom_symbols.push(symbol_lookup[&bottom_symbol.to_string()]);
+                    if !weight_lookup.contains_key(&weight.to_le_bytes()) {
+                        let l = weight_lookup.len();
+                        weight_lookup.insert(weight.to_le_bytes(), l.try_into().unwrap());
+                        weight_set.push(weight);
+                    }
+                    weights.push(weight_lookup[&weight.to_le_bytes()]);
+                }
+            }
+        }
 
         let target: EmbeddedFST<BoxContainer> = EmbeddedFST {
             _final_states: final_states.into_boxed_slice(),
             _symbols: symbols.into_boxed_slice(),
-            _rules: rules.into_boxed_slice(),
+            source_states: start_states.into_boxed_slice(),
+            target_states: target_states.into_boxed_slice(),
+            top_symbols: top_symbols.into_boxed_slice(),
+            bottom_symbols: bottom_symbols.into_boxed_slice(),
+            weights: weights.into_boxed_slice(),
+            weightset: weight_set.into_boxed_slice()
         };
 
         target
@@ -2612,7 +2663,7 @@ impl<C: Container> HasRunFst for EmbeddedFST<C> {
         let isymbol = if input_symbols.len() - input_symbol_index == 0 {
             match self
                 ._final_states
-                .as_ref().binary_search_by(|x| x.0.cmp(&state.state_num))
+                .as_ref().binary_search_by(|x| (x.0 as u64).cmp(&state.state_num))
             {
                 Ok(idx) => {
                     // Update weight of state to account for weight of final state
@@ -2621,7 +2672,7 @@ impl<C: Container> HasRunFst for EmbeddedFST<C> {
                         post_input_advance,
                         InternalFSTState {
                             state_num: state.state_num,
-                            path_weight: state.path_weight + self._final_states.as_ref()[idx].1,
+                            path_weight: state.path_weight + self.weightset.as_ref()[self._final_states.as_ref()[idx].1 as usize],
                             input_flags: state.input_flags.clone(),
                             output_flags: state.output_flags.clone(),
                             symbol_mappings: state.symbol_mappings.clone(),
@@ -2639,26 +2690,41 @@ impl<C: Container> HasRunFst for EmbeddedFST<C> {
         } else {
             Some(&input_symbols[input_symbol_index])
         };
+        let isymbol_text = isymbol.map(|x| x.get_symbol());
         for transition in transitions {
             // Safe to unwrap; all should be created at compile time from valid symbols
 
-            let transition_isymbol = Symbol::parse(transition.0).unwrap().1;
+            // Short-circuiting guard & co to avoid symbol parses unless it looks likely that they actually are hits
+            // Or they are potentially relevant epsilons
 
-            if transition_isymbol.is_epsilon() || isymbol == Some(&transition_isymbol) {
-                self._transition(
-                    input_symbols,
-                    input_symbol_index,
-                    state,
-                    &[(
-                        transition.1 .0,
-                        Symbol::parse(transition.1 .1).unwrap().1,
-                        transition.1 .2,
-                    )],
-                    isymbol,
-                    &transition_isymbol,
-                    result,
-                    keep_non_final,
-                );
+            let mut parsed_symbol = None;
+            let mut hit = false;
+            
+            if isymbol_text.as_ref().map(|x| x.as_str() == transition.0).unwrap_or(false) {
+                parsed_symbol = Some(Symbol::parse(transition.0).unwrap().1);
+                hit = true;
+            } else if transition.0.starts_with("@") {
+                parsed_symbol = Some(Symbol::parse(transition.0).unwrap().1);
+                hit = parsed_symbol.as_ref().map(|x| x.is_epsilon()).unwrap();
+            }
+
+            if hit {
+                    parsed_symbol.map(|transition_isymbol| {
+                        self._transition(
+                        input_symbols,
+                        input_symbol_index,
+                        state,
+                        &[(
+                            transition.1 .0,
+                            Symbol::parse(transition.1 .1).unwrap().1,
+                            transition.1 .2,
+                        )],
+                        isymbol,
+                        &transition_isymbol,
+                        result,
+                        keep_non_final,
+                    );
+                });
             }
         }
         if let Some(isymbol) = isymbol {
