@@ -20,8 +20,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Generator, Mapping, NamedTuple
 
-from immutables import Map
-
 from .symbols import Symbol, StringSymbol, FlagDiacriticSymbol, SpecialSymbol
 
 class TokenizationException(Exception):
@@ -32,8 +30,8 @@ class TokenizationException(Exception):
 class FSTState(NamedTuple):
     state_num: int
     path_weight: float = 0
-    input_flags: Map[str, tuple[bool, str]] = Map()
-    output_flags: Map[str, tuple[bool, str]] = Map()
+    input_flags: frozendict[str, tuple[bool, str]] = frozendict()
+    output_flags: frozendict[str, tuple[bool, str]] = frozendict()
     output_symbols: tuple[Symbol, ...] = tuple()
     input_indices: tuple[int, ...] | None = tuple()
 
@@ -341,7 +339,7 @@ class FST(NamedTuple):
                 yield o, w
                 already_seen.add(o)
     
-    def _update_flags(self, symbol: Symbol, flags: Map[str, tuple[bool, str]]) -> Map[str, tuple[bool, str]] | None:
+    def _update_flags(self, symbol: Symbol, flags: frozendict[str, tuple[bool, str]]) -> frozendict[str, tuple[bool, str]] | None:
         if isinstance(symbol, FlagDiacriticSymbol):
             flag = symbol.flag_type
             key = symbol.key
@@ -350,7 +348,7 @@ class FST(NamedTuple):
             if flag == "U":
                 assert value is not None
                 if key not in flags or (flags[key][1] == value if flags[key][0] else flags[key][1] != value):
-                    return flags.set(key, (True, value))
+                    return frozendict(flags | {key: (True, value)})
                 
                 else:
                     return None
@@ -390,7 +388,7 @@ class FST(NamedTuple):
             # clear flag
             elif flag == "C":
                 if key in flags:
-                    return flags.delete(key)
+                    return frozendict((k, v) for k, v in flags.items() if k != key)
 
                 else:
                     return flags
@@ -398,12 +396,12 @@ class FST(NamedTuple):
             # positive (re)setting flag (2 params)
             elif flag == "P":
                 assert value is not None
-                return flags.set(key, (True, value))
+                return frozendict(flags | {key: (True, value)})
             
             # negative (re)setting flag (2 params)
             elif flag == "N":
                 assert value is not None
-                return flags.set(key, (False, value))
+                return frozendict(flags | {key: (False, value)})
         
         return flags
 

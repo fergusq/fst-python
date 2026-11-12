@@ -11,7 +11,7 @@ authors = [
 name = "kfst-rs"
 description = "The accelerated companion library to kfst"
 keywords = ["finnish", "nlp", "morphology", "rust"]
-requires-python = ">=3.11"
+requires-python = ">=3.15"
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",

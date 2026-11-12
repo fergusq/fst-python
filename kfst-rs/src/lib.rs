@@ -90,7 +90,7 @@ use pyo3::create_exception;
 #[cfg(feature = "python")]
 use pyo3::exceptions::{PyIOError, PyValueError};
 #[cfg(feature = "python")]
-use pyo3::types::{PyDict, PyNone, PyTuple};
+use pyo3::types::{PyAny, PyDict, PyFrozenDict, PyNone, PyTuple};
 #[cfg(feature = "python")]
 use pyo3::{prelude::*, py_run, IntoPyObjectExt};
 
@@ -169,7 +169,7 @@ where
 
 #[cfg_attr(
     feature = "python",
-    pyclass(str = "RawSymbol({value:?})", eq, ord, frozen, hash, get_all)
+    pyclass(str = "RawSymbol({value:?})", eq, ord, frozen, hash, get_all, from_py_object)
 )]
 #[derive(Clone, Copy, Hash, PartialEq, PartialOrd, Ord, Eq, Debug)]
 #[readonly::make]
@@ -227,13 +227,13 @@ impl RawSymbol {
 
 #[cfg(feature = "python")]
 struct PyObjectSymbol {
-    value: PyObject,
+    value: Py<PyAny>,
 }
 
 #[cfg(feature = "python")]
 impl Debug for PyObjectSymbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             // Seemingly compiling for CPython3.13t (=free-threaded) doesn't for some mysterious reason allow to extract to a &str
             // So an owned string it must be
             let s: String = self
@@ -252,7 +252,7 @@ impl Debug for PyObjectSymbol {
 #[cfg(feature = "python")]
 impl PartialEq for PyObjectSymbol {
     fn eq(&self, other: &Self) -> bool {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             self.value
                 .getattr(py, "__eq__")
                 .unwrap_or_else(|_| {
@@ -274,7 +274,7 @@ impl PartialEq for PyObjectSymbol {
 #[cfg(feature = "python")]
 impl Hash for PyObjectSymbol {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        state.write_i128(Python::with_gil(|py| {
+        state.write_i128(Python::attach(|py| {
             self.value
                 .getattr(py, "__hash__")
                 .unwrap_or_else(|_| {
@@ -311,7 +311,7 @@ impl PartialOrd for PyObjectSymbol {
 #[cfg(feature = "python")]
 impl Ord for PyObjectSymbol {
     fn cmp(&self, other: &Self) -> Ordering {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             match self
                 .value
                 .getattr(py, "__gt__")
@@ -359,7 +359,7 @@ impl Ord for PyObjectSymbol {
 #[cfg(feature = "python")]
 impl Clone for PyObjectSymbol {
     fn clone(&self) -> Self {
-        Python::with_gil(|py| Self {
+        Python::attach(|py| Self {
             value: self.value.clone_ref(py),
         })
     }
@@ -392,7 +392,7 @@ impl<'py> IntoPyObject<'py> for PyObjectSymbol {
 #[cfg(feature = "python")]
 impl PyObjectSymbol {
     fn is_epsilon(&self) -> bool {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             self.value
                 .getattr(py, "is_epsilon")
                 .unwrap_or_else(|_| {
@@ -416,7 +416,7 @@ impl PyObjectSymbol {
     }
 
     fn is_unknown(&self) -> bool {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             self.value
                 .getattr(py, "is_unknown")
                 .unwrap_or_else(|_| {
@@ -440,7 +440,7 @@ impl PyObjectSymbol {
     }
 
     fn get_symbol(&self) -> String {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             self.value
                 .getattr(py, "get_symbol")
                 .unwrap_or_else(|_| {
@@ -472,7 +472,8 @@ impl PyObjectSymbol {
         ord,
         frozen,
         hash,
-        get_all
+        get_all,
+        from_py_object
     )
 )]
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -642,7 +643,8 @@ impl FlagDiacriticType {
         eq,
         ord,
         frozen,
-        hash
+        hash,
+        from_py_object
     )
 )]
 #[derive(PartialEq, Eq, Clone, Copy, Hash)]
@@ -866,7 +868,7 @@ impl std::fmt::Debug for FlagDiacriticSymbol {
     }
 }
 
-#[cfg_attr(feature = "python", pyclass(eq, ord, frozen, hash))]
+#[cfg_attr(feature = "python", pyclass(eq, ord, frozen, hash, from_py_object))]
 #[derive(PartialEq, Eq, Clone, Hash, Copy)]
 /// The three possible HFST special symbols.
 pub enum SpecialSymbol {
@@ -1155,7 +1157,7 @@ impl Ord for Symbol {
                 match (self, other) {
                     #[cfg(feature = "python")]
                     (Symbol::External(left), right) => {
-                        Python::with_gil(|py| {
+                        Python::attach(|py| {
                             // Strictly less than
 
                             if left
@@ -1215,7 +1217,7 @@ impl Ord for Symbol {
                     }
                     #[cfg(feature = "python")]
                     (left, Symbol::External(right)) => {
-                        Python::with_gil(|py| {
+                        Python::attach(|py| {
                             // Strictly less than
 
                             if right
@@ -1504,17 +1506,11 @@ impl<'py> IntoPyObject<'py> for FlagMap {
     type Error = pyo3::PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
-        let collection = self
-            .0
-            .into_iter()
-            .map(|(a, b, c)| (deintern(a), (b, deintern(c))))
-            .collect::<Vec<_>>()
-            .into_pyobject(py)?;
-        let immutables = PyModule::import(py, "immutables")?;
-        let map_class = immutables.getattr("Map")?;
-        let new = map_class.call_method1("__new__", (&map_class,))?;
-        map_class.call_method1("__init__", (&new, collection))?;
-        Ok(new)
+        let items = self
+           .0
+           .into_iter()
+           .map(|(a, b, c)| (deintern(a), (b, deintern(c))));
+        Ok(PyFrozenDict::new(py, items)?.into_any())
     }
 }
 
@@ -1579,7 +1575,7 @@ impl<T: Clone + Default> FSTLinkedList<T> {
 pub type FSTState<T> = InternalFSTState<T>;
 
 #[cfg(feature = "python")]
-#[cfg_attr(feature = "python", pyclass(frozen, eq, hash))]
+#[cfg_attr(feature = "python", pyclass(frozen, eq, hash, from_py_object))]
 #[derive(Clone, Debug, PartialEq, PartialOrd, Hash)]
 pub struct FSTState {
     payload: Result<InternalFSTState<usize>, InternalFSTState<()>>,
@@ -3134,7 +3130,7 @@ impl FST {
     #[cfg(feature = "python")]
     #[staticmethod]
     #[pyo3(signature = (att_file, debug = false))]
-    fn from_att_file(py: Python<'_>, att_file: PyObject, debug: bool) -> KFSTResult<FST> {
+    fn from_att_file(py: Python<'_>, att_file: Py<PyAny>, debug: bool) -> KFSTResult<FST> {
         FST::_from_att_file(att_file.call_method0(py, "__str__")?.extract(py)?, debug)
     }
 
@@ -3146,7 +3142,7 @@ impl FST {
     }
 
     #[cfg(feature = "python")]
-    pub fn to_att_file(&self, py: Python<'_>, att_file: PyObject) -> KFSTResult<()> {
+    pub fn to_att_file(&self, py: Python<'_>, att_file: Py<PyAny>) -> KFSTResult<()> {
         let path: String = att_file.call_method0(py, "__str__")?.extract(py)?;
         fs::write(Path::new(&path), self.to_att_code()).map_err(|err| {
             io_error::<()>(format!("Failed to write to file {path}:\n{err}")).unwrap_err()
@@ -3228,7 +3224,7 @@ impl FST {
     #[cfg(feature = "python")]
     #[staticmethod]
     #[pyo3(signature = (kfst_file, debug = false))]
-    fn from_kfst_file(py: Python<'_>, kfst_file: PyObject, debug: bool) -> KFSTResult<FST> {
+    fn from_kfst_file(py: Python<'_>, kfst_file: Py<PyAny>, debug: bool) -> KFSTResult<FST> {
         FST::_from_kfst_file(kfst_file.call_method0(py, "__str__")?.extract(py)?, debug)
     }
 
@@ -3240,7 +3236,7 @@ impl FST {
     }
 
     #[cfg(feature = "python")]
-    pub fn to_kfst_file(&self, py: Python<'_>, kfst_file: PyObject) -> KFSTResult<()> {
+    pub fn to_kfst_file(&self, py: Python<'_>, kfst_file: Py<PyAny>) -> KFSTResult<()> {
         let bytes = self.to_kfst_bytes()?;
         let path: String = kfst_file.call_method0(py, "__str__")?.extract(py)?;
         fs::write(Path::new(&path), bytes).map_err(|err| {
