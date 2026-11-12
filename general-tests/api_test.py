@@ -3,7 +3,6 @@ import kfst
 assert kfst.BACKEND == "kfst_rs"
 from pathlib import Path
 import time
-from immutables import Map
 
 for k in [kfst, kfst_py]:
     
@@ -68,15 +67,15 @@ for k in [kfst, kfst_py]:
     assert kfst.transducer.FSTState(
         state_num=3,
         path_weight=12.5,
-        input_flags=Map({"x": (True, "y")}),
-        output_flags=Map({"u": (True, "v")}),
+        input_flags=frozendict({"x": (True, "y")}),
+        output_flags=frozendict({"u": (True, "v")}),
         output_symbols=(kfst.symbols.SpecialSymbol.EPSILON,),
         input_indices=(5,)
     ) == kfst.transducer.FSTState(
         3,
         12.5,
-        Map({"x": (True, "y")}),
-        Map({"u": (True, "v")}),
+        frozendict({"x": (True, "y")}),
+        frozendict({"u": (True, "v")}),
         (kfst.symbols.SpecialSymbol.EPSILON,),
         (5,)
     )
@@ -86,29 +85,29 @@ for k in [kfst, kfst_py]:
     assert kfst.transducer.FSTState(
         state_num=3,
         path_weight=12.5,
-        input_flags=Map({"x": (True, "y")}),
-        output_flags=Map({"u": (True, "v")}),
+        input_flags=frozendict({"x": (True, "y")}),
+        output_flags=frozendict({"u": (True, "v")}),
         output_symbols=(kfst.symbols.SpecialSymbol.EPSILON,),
         input_indices=tuple()
     ) == kfst.transducer.FSTState(
         3,
         12.5,
-        Map({"x": (True, "y")}),
-        Map({"u": (True, "v")}),
+        frozendict({"x": (True, "y")}),
+        frozendict({"u": (True, "v")}),
         (kfst.symbols.SpecialSymbol.EPSILON,),
     )
     
     assert kfst.transducer.FSTState(
         state_num=3,
         path_weight=12.5,
-        input_flags=Map({"x": (True, "y")}),
-        output_flags=Map({"u": (True, "v")}),
+        input_flags=frozendict({"x": (True, "y")}),
+        output_flags=frozendict({"u": (True, "v")}),
         output_symbols=(kfst.symbols.SpecialSymbol.EPSILON,),
     ) == kfst.transducer.FSTState(
         3,
         12.5,
-        Map({"x": (True, "y")}),
-        Map({"u": (True, "v")}),
+        frozendict({"x": (True, "y")}),
+        frozendict({"u": (True, "v")}),
         (kfst.symbols.SpecialSymbol.EPSILON,),
         tuple()
     )
@@ -118,32 +117,32 @@ for k in [kfst, kfst_py]:
     assert kfst.transducer.FSTState(
         state_num=3,
         path_weight=12.5,
-        input_flags=Map({"x": (True, "y")}),
-        output_flags=Map({"u": (True, "v")}),
+        input_flags=frozendict({"x": (True, "y")}),
+        output_flags=frozendict({"u": (True, "v")}),
         output_symbols=(kfst.symbols.SpecialSymbol.EPSILON,),
-    ).input_flags == Map({"x": (True, "y")})
+    ).input_flags == frozendict({"x": (True, "y")})
 
     assert kfst.transducer.FSTState(
         state_num=3,
         path_weight=12.5,
-        input_flags=Map({"x": (True, "y")}),
-        output_flags=Map({"u": (True, "v")}),
+        input_flags=frozendict({"x": (True, "y")}),
+        output_flags=frozendict({"u": (True, "v")}),
         output_symbols=(kfst.symbols.SpecialSymbol.EPSILON,),
-    ).output_flags == Map({"u": (True, "v")})
+    ).output_flags == frozendict({"u": (True, "v")})
 
     assert kfst.transducer.FSTState(
         state_num=3,
         path_weight=12.5,
-        input_flags=Map({"x": (True, "y")}),
-        output_flags=Map({"u": (True, "v")}),
+        input_flags=frozendict({"x": (True, "y")}),
+        output_flags=frozendict({"u": (True, "v")}),
         output_symbols=(kfst.symbols.SpecialSymbol.EPSILON, kfst.symbols.SpecialSymbol.UNKNOWN, kfst.symbols.SpecialSymbol.IDENTITY),
     ).output_symbols == (kfst.symbols.SpecialSymbol.EPSILON, kfst.symbols.SpecialSymbol.UNKNOWN, kfst.symbols.SpecialSymbol.IDENTITY)
 
     assert kfst.transducer.FSTState(
         state_num=3,
         path_weight=12.5,
-        input_flags=Map({"x": (True, "y")}),
-        output_flags=Map({"u": (True, "v")}),
+        input_flags=frozendict({"x": (True, "y")}),
+        output_flags=frozendict({"u": (True, "v")}),
         output_symbols=(kfst.symbols.SpecialSymbol.EPSILON, kfst.symbols.SpecialSymbol.UNKNOWN, kfst.symbols.SpecialSymbol.IDENTITY),
         input_indices=(10, 20, 30),
     ).input_indices == (10, 20, 30)
